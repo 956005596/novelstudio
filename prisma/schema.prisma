@@ -1,0 +1,101 @@
+// NovelStudio — AI 演绎叙事引擎
+// Prisma schema (SQLite)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 小说项目：一个独立的演绎世界
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  template    String   @default("online-game") // 风格模板 key
+  worldState  String   @default("{}")           // JSON: 当前 World State 快照
+  directorLvl Int      @default(3)              // Director 主导强度 1-5
+  status      String   @default("setup")        // setup | running | paused | ended
+  currentTurn Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  characters Character[]
+  events     Event[]
+  chapters   Chapter[]
+  directives Directive[]
+}
+
+// 角色 Agent
+model Character {
+  id           String   @id @default(cuid())
+  projectId    String
+  name         String
+  role         String   @default("npc") // protagonist | antagonist | npc
+  persona      String   @default("{}")  // JSON: 性格、背景、目标、立场
+  currentState String   @default("{}")  // JSON: 情绪、位置、与其他角色关系、属性
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events   Event[]  @relation("CharacterEvents")
+  proposed Event[]  @relation("CharacterProposed")
+
+  @@index([projectId])
+}
+
+// 事件日志：不可变，只能追加
+model Event {
+  id         String   @id @default(cuid())
+  projectId  String
+  turn       Int
+  agentId    String?  // 提案角色 ID（director 事件可为 null）
+  agentName  String   // 冗余：角色名，便于查询展示
+  type       String   // action | dialogue | state_change | scene_meta | director
+  content    String
+  target     String?  // 作用对象
+  emotion    String?  // 情绪标签
+  context    String?  // 前序事件 ID（可多个，逗号分隔）
+  status     String   @default("confirmed") // proposed | confirmed | rejected
+  createdAt  DateTime @default(now())
+
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  character  Character? @relation("CharacterEvents", fields: [agentId], references: [id], onDelete: SetNull)
+  proposer   Character? @relation("CharacterProposed", fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, turn])
+  @@index([projectId, status])
+}
+
+// 章节：Writer 输出
+model Chapter {
+  id         String   @id @default(cuid())
+  projectId  String
+  sceneName  String
+  content    String   @default("")
+  wordCount  Int      @default(0)
+  startTurn  Int
+  endTurn    Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+// 用户给 Director 的指令
+model Directive {
+  id         String   @id @default(cuid())
+  projectId  String
+  type       String   // command | world_state_edit | text_rewrite
+  content    String   // 指令文本或 JSON
+  status     String   @default("pending") // pending | applied | rejected
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+}
