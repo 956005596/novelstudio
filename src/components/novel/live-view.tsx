@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import {
   Play, Pause, Square, Send, ChevronLeft, Activity,
   Globe, Users, FileText, MessageSquare, Zap, AlertTriangle, Info, BookOpen,
+  RotateCcw, Loader2,
 } from 'lucide-react';
 import { useNovelStore } from '@/store/novel-store';
 import { useState } from 'react';
@@ -36,6 +37,7 @@ export function LiveView({ projectId, projectName, onBack }: {
   const [charEmotionInput, setCharEmotionInput] = useState('');
   const [charLocationInput, setCharLocationInput] = useState('');
   const [worldSceneInput, setWorldSceneInput] = useState('');
+  const [resetting, setResetting] = useState(false);
 
   const eventScrollRef = useRef<HTMLDivElement>(null);
   const writerScrollRef = useRef<HTMLDivElement>(null);
@@ -96,6 +98,24 @@ export function LiveView({ projectId, projectName, onBack }: {
     if (!confirm('确定停止演绎？需要重新启动才能继续。')) return;
     store.stopEngine();
     toast.info('演绎已停止');
+  };
+  const handleReset = async () => {
+    const confirmed = confirm(
+      '确定重置当前项目？\n\n' +
+      '将清空：所有事件日志、已生成章节、用户指令、World State 运行时状态\n' +
+      '保留：项目本身、角色设定（背景/性格/目标）、世界观、剧情节点\n\n' +
+      '适合"演绎得不好想重来"的场景，基于同一设定重新演绎。'
+    );
+    if (!confirmed) return;
+    setResetting(true);
+    try {
+      await store.resetProject(projectId);
+      toast.success('项目已重置，可以重新启动演绎');
+    } catch (e: any) {
+      toast.error(`重置失败: ${e.message}`);
+    } finally {
+      setResetting(false);
+    }
   };
   const handleDirectorCmd = () => {
     if (!directorCmd.trim()) return;
@@ -168,25 +188,39 @@ export function LiveView({ projectId, projectName, onBack }: {
           </div>
           <div className="flex items-center gap-2">
             {!isRunning && store.projectStatus !== 'paused' && (
-              <Button size="sm" onClick={handleStart} disabled={!store.connected}>
+              <Button size="sm" onClick={handleStart} disabled={!store.connected || resetting}>
                 <Play className="h-4 w-4 mr-1" /> 启动演绎
               </Button>
             )}
             {isRunning && (
-              <Button size="sm" variant="outline" onClick={handlePause}>
+              <Button size="sm" variant="outline" onClick={handlePause} disabled={resetting}>
                 <Pause className="h-4 w-4 mr-1" /> 暂停
               </Button>
             )}
             {store.projectStatus === 'paused' && (
-              <Button size="sm" onClick={handleResume}>
+              <Button size="sm" onClick={handleResume} disabled={resetting}>
                 <Play className="h-4 w-4 mr-1" /> 继续
               </Button>
             )}
             {(isRunning || store.projectStatus === 'paused') && (
-              <Button size="sm" variant="destructive" onClick={handleStop}>
+              <Button size="sm" variant="destructive" onClick={handleStop} disabled={resetting}>
                 <Square className="h-4 w-4 mr-1" /> 停止
               </Button>
             )}
+            <Separator orientation="vertical" className="h-5" />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleReset}
+              disabled={resetting || isRunning}
+              title={isRunning ? '请先停止演绎再重置' : '清空事件日志和章节，回到 Turn 0 重新演绎'}
+            >
+              {resetting ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> 重置中…</>
+              ) : (
+                <><RotateCcw className="h-4 w-4 mr-1" /> 重置</>
+              )}
+            </Button>
           </div>
         </div>
       </header>

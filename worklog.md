@@ -128,3 +128,40 @@ Stage Summary:
   - 重写 src/components/novel/setup-panel.tsx（SSE 进度 UI）
   - 修改 src/components/novel/live-view.tsx（角色档案展开 + 世界观面板）
 - 截图：/home/z/my-project/download/novelstudio-rich-characters.png
+
+---
+Task ID: 24-27 (项目重置功能)
+Agent: main (super-z)
+Task: 用户要求增加重置功能，演绎得不好时可以重来
+
+Work Log:
+- 新增 POST /api/projects/[id]/reset API：
+  - 清空 Event / Chapter / Directive 表
+  - 重置 World State: turn=0, tension=3, worldFlags={}, plotNodes.completed 全部重置为 false
+  - 重置角色 currentState: emotion="平静", location=场景初始位置, buffs=[]
+  - 保留：项目本身、角色 persona（背景故事/性格/目标/秘密）、worldLore、plotNodes 模板
+- Zustand store 新增 resetProject(projectId) 方法：
+  - 先停止引擎
+  - 调用 reset API
+  - 重新加载项目详情和角色
+  - 清空前端 events/chapterChunks/completedChapters/logs
+- LiveView 顶栏新增"重置"按钮：
+  - 引擎运行时 disabled（必须先停止）
+  - 点击弹出详细确认对话框（说明清空什么、保留什么）
+  - 重置中显示 Loader2 旋转 + "重置中…"
+  - 重置完成后 toast 提示
+- Agent Browser 验证：
+  - 启动演绎跑 3 Turn 9 事件
+  - 停止引擎 → 重置按钮可用
+  - 点击重置 → 确认对话框显示完整说明
+  - 接受 → Turn 回 0, 事件 0, 张力 3, 状态"空闲"
+  - 世界观/角色档案/剧情节点全部保留
+
+Stage Summary:
+- 重置功能完整闭环：停止引擎 → 确认 → 清空运行时状态 → 保留设定 → 可重新启动
+- 适合"演绎得不好想重来"的场景，基于同一世界观和角色重新演绎不同走向
+- 文件变更：
+  - 新增 src/app/api/projects/[id]/reset/route.ts
+  - 修改 src/store/novel-store.ts（+resetProject 方法）
+  - 修改 src/components/novel/live-view.tsx（+重置按钮 + 确认对话框 + resetting 状态）
+- 截图：/home/z/my-project/download/novelstudio-reset.png

@@ -53,6 +53,7 @@ interface NovelStoreState {
   sendWorldEdit: (patch: Partial<WorldState>) => void;
   sendCharacterEdit: (characterId: string, patch: Partial<Character['currentState']>) => void;
   sendWriterRewrite: (chapterId: string, content: string) => void;
+  resetProject: (projectId: string) => Promise<void>;
 
   // 内部
   _onWorldUpdate: (ws: WorldState) => void;
@@ -146,6 +147,31 @@ export const useNovelStore = create<NovelStoreState>((set, get) => ({
     get().socket?.emit('character:edit', { characterId, patch }),
   sendWriterRewrite: (chapterId, content) =>
     get().socket?.emit('writer:rewrite', { chapterId, content }),
+
+  resetProject: async (projectId: string) => {
+    // 先停止引擎
+    get().stopEngine();
+    // 调用 API 重置
+    const res = await fetch(`/api/projects/${projectId}/reset`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || '重置失败');
+    }
+    // 重新加载项目状态
+    const projRes = await fetch(`/api/projects/${projectId}`);
+    const projData = await projRes.json();
+    if (projData.project?.worldState) get()._onWorldUpdate(projData.project.worldState);
+    if (projData.characters) projData.characters.forEach((c: Character) => get()._onCharacterUpdate(c));
+    // 清空前端累积状态
+    set({
+      events: [],
+      chapterChunks: {},
+      completedChapters: [],
+      logs: [],
+      projectStatus: 'idle',
+    });
+    get()._onLog('info', '项目已重置，可以重新启动演绎');
+  },
 
   _onWorldUpdate: (ws) => set({ worldState: ws }),
   _onCharacterUpdate: (c) =>
