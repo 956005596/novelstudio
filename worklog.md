@@ -216,3 +216,29 @@ Stage Summary:
   - 修改 src/store/novel-store.ts（+setPacingMode）
   - 修改 src/components/novel/live-view.tsx（节点类型显示 + 节奏控制面板）
 - 截图：/home/z/my-project/download/novelstudio-pacing-control.png
+
+---
+Task ID: 34 (中栏 Tab 切换，解决正文被挤压)
+Agent: main (super-z)
+Task: 用户反馈正文被事件日志一直往下挤
+
+Work Log:
+- 中栏改为 Tab 切换模式（3 种视图）：
+  - 「小说正文」：全屏显示 Writer 输出，max-width 3xl 居中，阅读体验好
+  - 「事件日志」：全屏显示事件列表
+  - 「分屏」：上下各 50%（默认）
+- Tab 标签实时显示数据：小说正文(N字) / 事件日志(N条) / 分屏
+- Writer 生成中时 Tab 标签显示橙色脉冲点 ●
+- fullHeight 模式：单视图时隐藏内部 header（避免重复），分屏模式保留 header
+- Agent Browser 验证：
+  - 默认分屏：事件日志 + Writer 上下各 50%
+  - 点"小说正文"：全屏 950 字阅读，无挤压
+  - 点"事件日志"：全屏 36 个事件
+  - Tab 切换瞬时响应
+
+Stage Summary:
+- 解决正文被挤压：用户可切换全屏正文/全屏事件/分屏三种模式
+- 阅读体验提升：全屏正文 max-width 3xl 居中，类似阅读器
+- 实时状态：Tab 标签显示字数/事件数，生成中有脉冲提示
+- 文件变更：仅修改 src/components/novel/live-view.tsx（+centerView state + Tab UI + fullHeight prop）
+- 截图：/home/z/my-project/download/novelstudio-tab-view.png
