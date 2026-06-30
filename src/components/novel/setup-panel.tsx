@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2 } from 'lucide-react';
+import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2, AlertCircle, RotateCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { onlineGameTemplate } from '@/lib/novel/templates/online-game';
 
@@ -38,6 +38,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
   const [outline, setOutline] = useState('');
   const [outlineName, setOutlineName] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const refresh = async () => {
     const res = await fetch('/api/projects');
@@ -87,6 +88,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
       return;
     }
     setGenerating(true);
+    setLastError(null);
     try {
       const res = await fetch('/api/projects/from-outline', {
         method: 'POST',
@@ -97,12 +99,17 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'AI 解析失败');
+      if (!res.ok) {
+        const errMsg = data.error || 'AI 解析失败';
+        setLastError(errMsg);
+        throw new Error(errMsg);
+      }
       toast.success(
         `AI 已生成：${data.name}（${data.characterCount} 角色 / ${data.plotNodeCount} 剧情节点）`
       );
       setOutline('');
       setOutlineName('');
+      setLastError(null);
       await refresh();
       onEnter(data.id, data.name);
     } catch (e: any) {
@@ -197,6 +204,25 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                 </div>
               )}
 
+              {/* 错误提示 */}
+              {lastError && !generating && (
+                <div className="flex items-start gap-2 p-3 rounded-md border border-destructive/30 bg-destructive/5 text-destructive">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 text-sm">
+                    <div className="font-medium">解析失败</div>
+                    <div className="text-xs opacity-90 mt-0.5">{lastError}</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={createFromOutline}
+                  >
+                    <RotateCw className="h-3 w-3 mr-1" /> 重试
+                  </Button>
+                </div>
+              )}
+
               <Button
                 onClick={createFromOutline}
                 disabled={generating || !outline.trim() || outline.trim().length < 10}
@@ -204,7 +230,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
               >
                 {generating ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" /> AI 解析中…（约 10-20 秒）
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" /> AI 解析中…（约 10-30 秒）
                   </>
                 ) : (
                   <>

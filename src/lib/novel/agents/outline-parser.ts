@@ -149,14 +149,37 @@ ${trimmed}
     { role: 'user', content: userPrompt },
   ];
 
-  const raw = await chat(messages, { temperature: 0.7, maxTokens: 4000 });
-  const parsed = extractJSON<any>(raw);
-
-  if (!parsed || !parsed.worldState || !parsed.characters) {
-    throw new Error('AI 解析大纲失败，请重试或换种描述方式');
+  let raw: string;
+  try {
+    raw = await chat(messages, { temperature: 0.7, maxTokens: 4000 });
+  } catch (err: any) {
+    console.error('[OutlineParser] LLM 调用失败:', err.message);
+    throw new Error(`AI 服务暂时不可用: ${err.message}（请稍后重试）`);
   }
 
-  // 兜底：模板只支持 online-game，其他都降级为 online-game 但保留自定义风格
+  if (!raw || raw.trim().length === 0) {
+    throw new Error('AI 返回为空，请重试');
+  }
+
+  console.log('[OutlineParser] LLM 原始输出前 500 字:', raw.slice(0, 500));
+
+  const parsed = extractJSON<any>(raw);
+
+  if (!parsed) {
+    console.error('[OutlineParser] JSON 解析失败，原始输出:', raw.slice(0, 1000));
+    throw new Error('AI 输出格式异常，请换种描述方式重试');
+  }
+
+  // 兼容字段名差异：有些 LLM 会把 worldState 写成 world，characters 写成 character_list 等
+  const rawWorld = parsed.worldState ?? parsed.world ?? parsed.scene ?? {};
+  const rawChars = parsed.characters ?? parsed.character_list ?? parsed.characterList ?? [];
+
+  if (!rawWorld || (Array.isArray(rawChars) && rawChars.length === 0)) {
+    console.error('[OutlineParser] 缺少必要字段，parsed 顶层 keys:', Object.keys(parsed));
+    throw new Error('AI 输出缺少必要字段（World State 或角色），请重试');
+  }
+
+  // 兜底：模板只支持 online-game，其他都降级为 online-game
   const supportedTemplates = ['online-game'];
   const templateKey = supportedTemplates.includes(parsed.templateKey)
     ? parsed.templateKey
@@ -164,54 +187,57 @@ ${trimmed}
 
   // 兜底字段
   const worldState: WorldState = {
-    sceneName: parsed.worldState.sceneName ?? '未命名场景',
-    sceneDescription: parsed.worldState.sceneDescription ?? '',
-    location: parsed.worldState.location ?? '未知',
-    timeOfDay: parsed.worldState.timeOfDay ?? '白天',
+    sceneName: rawWorld.sceneName ?? rawWorld.name ?? '未命名场景',
+    sceneDescription: rawWorld.sceneDescription ?? rawWorld.description ?? '',
+    location: rawWorld.location ?? '未知',
+    timeOfDay: rawWorld.timeOfDay ?? rawWorld.time ?? '白天',
     presentCharacterIds: [],
-    worldFlags: parsed.worldState.worldFlags ?? {},
-    tension: parsed.worldState.tension ?? 3,
+    worldFlags: rawWorld.worldFlags ?? {},
+    tension: Number(rawWorld.tension ?? 3),
     turn: 0,
-    // plotNodes 挂在 worldFlags 上（避免改 schema）
-    ...(parsed.worldState.plotNodes
-      ? { plotNodes: parsed.worldState.plotNodes }
-      : {}),
+    ...(Array.isArray(rawWorld.plotNodes) ? { plotNodes: rawWorld.plotNodes } : {}),
+    ...(parsed.writerHint ? { writerHint: parsed.writerHint } : {}),
   } as any;
 
-  const characters: Omit<Character, 'id'>[] = (parsed.characters ?? []).map(
+  // 兜底角色字段
+  const characters: Omit<Character, 'id'>[] = (Array.isArray(rawChars) ? rawChars : []).map(
     (c: any) => ({
       name: c.name ?? '未命名角色',
       role: c.role ?? 'npc',
       persona: {
-        background: c.persona?.background ?? '',
-        personality: c.persona?.personality ?? [],
-        goals: c.persona?.goals ?? [],
-        stance: c.persona?.stance ?? '',
-        speechStyle: c.persona?.speechStyle ?? '',
-        attributes: c.persona?.attributes,
-        skills: c.persona?.skills,
-        equipment: c.persona?.equipment,
+        background: c.persona?.background ?? c.background ?? '',
+        personality: c.persona?.personality ?? c.personality ?? [],
+        goals: c.persona?.goals ?? c.goals ?? [],
+        stance: c.persona?.stance ?? c.stance ?? '',
+        speechStyle: c.persona?.speechStyle ?? c.speechStyle ?? c.speech_style ?? '',
+        attributes: c.persona?.attributes ?? c.attributes,
+        skills: c.persona?.skills ?? c.skills,
+        equipment: c.persona?.equipment ?? c.equipment,
       } as CharacterPersona,
       currentState: {
-        emotion: c.currentState?.emotion ?? '平静',
-        location: c.currentState?.location ?? worldState.location,
-        relationships: c.currentState?.relationships ?? {},
-        hp: c.currentState?.hp,
-        mp: c.currentState?.mp,
-        level: c.currentState?.level,
-        buffs: c.currentState?.buffs ?? [],
+        emotion: c.currentState?.emotion ?? c.emotion ?? '平静',
+        location: c.currentState?.location ?? c.location ?? worldState.location,
+        relationships: c.currentState?.relationships ?? c.relationships ?? {},
+        hp: c.currentState?.hp ?? c.hp,
+        mp: c.currentState?.mp ?? c.mp,
+        level: c.currentState?.level ?? c.level,
+        buffs: c.currentState?.buffs ?? c.buffs ?? [],
       } as CharacterState,
     })
   );
 
-  // 互查 relationships：如果 A 提到 B 但 B 没提到 A，补一个默认关系
+  if (characters.length === 0) {
+    throw new Error('AI 未生成任何角色，请重试');
+  }
+
+  // 互查 relationships
   for (const c of characters) {
     for (const otherName of Object.keys(c.currentState.relationships)) {
       const other = characters.find((x) => x.name === otherName);
       if (other && !other.currentState.relationships[c.name]) {
         const rel = c.currentState.relationships[otherName];
         other.currentState.relationships[c.name] = {
-          value: rel.value, // 镜像
+          value: rel.value,
           note: `（${otherName} 视角未明确）`,
         };
       }
@@ -223,7 +249,7 @@ ${trimmed}
     templateReason: parsed.templateReason ?? '',
     worldState,
     characters,
-    plotNodes: parsed.worldState.plotNodes ?? [],
+    plotNodes: rawWorld.plotNodes ?? [],
     writerHint: parsed.writerHint,
   };
 }
