@@ -43,3 +43,42 @@ Stage Summary:
   - mini-services/novel-engine/ (index.ts, manager.ts)
 - 导出文件：/home/z/my-project/download/首杀试炼.md (5 章 3155 字)
 - 截图：/home/z/my-project/download/novelstudio-running.png
+
+---
+Task ID: 12-17 (Outline AI 生成模式)
+Agent: main (super-z)
+Task: 用户反馈"没法定义大纲，AI 自动接入"——新增 AI 大纲解析入口
+
+Work Log:
+- 新增 Outline Parser Agent `src/lib/novel/agents/outline-parser.ts`：
+  - 接受任意粒度大纲（一句话/多段/章节）
+  - LLM 解析为：风格判断 + World State + 角色（含 persona/relationships）+ 剧情节点（plotNodes）
+  - 自动互查 relationships（A 提到 B 时，B 也补一个镜像关系）
+- 扩展 WorldState 类型加入 `plotNodes: PlotNode[]` 和 `writerHint?: string`
+- 新增 API `POST /api/projects/from-outline`：调用 outline-parser 创建项目+角色+回填 presentCharacterIds
+- 更新 Director Agent：决策时读取 plotNodes 作为"剧情骨架"，标注"当前应推进的节点"，注入"节点推进原则"
+- 更新前端 SetupPanel：
+  - Tabs 双模式：「AI 生成（输入大纲）」默认 / 「预设模板（快速启动）」
+  - AI 模式：项目名（可空）+ 大纲 Textarea + 3 个示例快选按钮
+  - 生成中显示 "AI 解析中…（约 10-20 秒）" 带 Loader2 旋转图标
+- 更新 LiveView 右栏：新增"剧情节点"面板，显示 plotNodes 进度（✓/○），目标 Turn，描述
+- Agent Browser 端到端验证：
+  - 输入"退役剑士林墨回归新服…"大纲 → AI 生成项目"迷雾峡谷"
+  - 4 个剧情节点（旧仇重逢/副本组队/危机初现/摊牌时刻）
+  - 3 个角色（林墨/赵铁柱/苏晚）完整 persona+技能+属性+关系网
+  - 启动演绎后 Director 旁白明确"旧仇重逢节点开启"，遵循骨架推进
+  - Writer 输出 647 字演绎文本（非总结），技能名「」括起，符合网游爽文调性
+
+Stage Summary:
+- 解决了用户痛点：现在可以"直接发大纲，AI 自动接入"——无需手选模板/手填角色
+- 大纲作为剧情骨架生效：Director 在决策时明确遵循 plotNodes，不会跑偏
+- 预设模板保留作为快速启动选项，不破坏已有功能
+- AI 解析能力验证通过：一句话简介 → 完整 World State + 角色 + 节点
+- 文件变更：
+  - 新增 src/lib/novel/agents/outline-parser.ts
+  - 新增 src/app/api/projects/from-outline/route.ts
+  - 修改 src/lib/novel/types.ts（+PlotNode, +plotNodes, +writerHint）
+  - 修改 src/lib/novel/agents/director.ts（读取 plotNodes）
+  - 重写 src/components/novel/setup-panel.tsx（Tabs 双模式）
+  - 修改 src/components/novel/live-view.tsx（剧情节点面板）
+- 截图：/home/z/my-project/download/novelstudio-outline-mode.png

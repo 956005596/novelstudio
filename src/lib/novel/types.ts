@@ -52,6 +52,14 @@ export interface Character {
   currentState: CharacterState;
 }
 
+export interface PlotNode {
+  index: number;
+  title: string;
+  description: string;
+  targetTurn?: number;
+  completed: boolean;
+}
+
 export interface WorldState {
   sceneName: string;
   sceneDescription: string;
@@ -61,6 +69,8 @@ export interface WorldState {
   worldFlags: Record<string, string | number | boolean>;
   tension: number;
   turn: number;
+  plotNodes?: PlotNode[];        // 大纲解析出的剧情节点，供 Director 作为骨架
+  writerHint?: string;           // 来自大纲的额外风格提示
 }
 
 export interface WorldTemplate {

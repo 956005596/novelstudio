@@ -471,6 +471,38 @@ function InterventionPanel({
 
       <Separator />
 
+      {/* 剧情节点（来自大纲） */}
+      {worldState?.plotNodes && worldState.plotNodes.length > 0 && (
+        <>
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <BookOpen className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold">剧情节点</h3>
+              <Badge variant="outline">
+                {worldState.plotNodes.filter((n: any) => n.completed).length}/{worldState.plotNodes.length}
+              </Badge>
+            </div>
+            <div className="space-y-1.5">
+              {worldState.plotNodes.map((n: any) => (
+                <div
+                  key={n.index}
+                  className={`text-xs p-2 rounded border ${
+                    n.completed ? 'bg-green-50 border-green-200 line-through opacity-60' : 'bg-amber-50 border-amber-200'
+                  }`}
+                >
+                  <div className="font-medium flex items-center gap-1">
+                    {n.completed ? '✓' : '○'} 节点{n.index} · {n.title}
+                    {n.targetTurn && <span className="text-muted-foreground font-normal">(T{n.targetTurn})</span>}
+                  </div>
+                  <div className="text-muted-foreground mt-0.5">{n.description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <Separator />
+        </>
+      )}
+
       {/* World State 编辑 */}
       <div>
         <div className="flex items-center gap-2 mb-2">

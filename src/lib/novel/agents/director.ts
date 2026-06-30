@@ -133,6 +133,12 @@ export async function directorDecide(
 Turn：${worldState.turn}
 场景描述：${worldState.sceneDescription}
 
+${(worldState.plotNodes && worldState.plotNodes.length > 0) ? `# 剧情骨架（来自用户大纲，请遵循）
+${worldState.plotNodes.map((n) => `- [${n.completed ? '✓' : ' '}] 节点${n.index} (T${n.targetTurn ?? '?'}): ${n.title} — ${n.description}`).join('\n')}
+
+**当前应推进的节点**：${worldState.plotNodes.find((n) => !n.completed)?.title ?? '全部已完成'}
+**节点推进原则**：每个节点要充分演绎（2-4 个 turn），不要急于跳到下一个；节点完成后世界状态应有明显变化。` : '# 剧情骨架：无（自由演绎）'}
+
 # 在场角色
 ${presentChars
   .map(
@@ -160,7 +166,7 @@ ${pendingDirectives.map((d) => `- ${d.content}`).join('\n')}` : '# 用户指令�
 # 决策任务
 请基于以上信息，决定本 Turn：
 1. 哪些角色行动？（选择 1-3 个，按执行顺序，**用角色名**，每个角色只出现一次）
-2. 是否需要注入 Director 事件？（如开场白、转场、强制冲突）
+2. 是否需要注入 Director 事件？（如开场白、转场、强制冲突、推进剧情节点）
 3. 是否触发 Writer 输出本场景文本？
 4. 张力调整（-3 到 +3）
 5. 场景是否需要切换？
