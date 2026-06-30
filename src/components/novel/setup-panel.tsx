@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2, AlertCircle, RotateCw } from 'lucide-react';
+import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2, AlertCircle, RotateCw, CheckCircle2, Globe, Users, GitBranch, BookMarked, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { onlineGameTemplate } from '@/lib/novel/templates/online-game';
 
@@ -29,6 +29,20 @@ const OUTLINE_EXAMPLES = [
   '商战：老牌车企德盛面临新能源转型，技术总监主张自研、CFO 主张收购初创公司，CEO 摇摆不定。三方在董事会上对决，最后揭露 CFO 与初创公司有利益输送。',
 ];
 
+// 阶段定义（用于进度展示）
+const STAGES = [
+  { key: 'compressing', label: '压缩大纲', icon: BookMarked },
+  { key: 'world-lore', label: '构建世界观', icon: Globe },
+  { key: 'characters', label: '设计角色', icon: Users },
+  { key: 'plot-nodes', label: '拆解剧情', icon: GitBranch },
+  { key: 'saving', label: '保存项目', icon: Save },
+] as const;
+
+interface StageState {
+  status: 'pending' | 'running' | 'done' | 'error';
+  message?: string;
+}
+
 export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectName: string) => void }) {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [newName, setNewName] = useState('');
@@ -39,6 +53,12 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
   const [outlineName, setOutlineName] = useState('');
   const [generating, setGenerating] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+
+  // 进度跟踪
+  const [progressMsg, setProgressMsg] = useState<string>('');
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [stageStates, setStageStates] = useState<Record<string, StageState>>({});
+  const abortRef = useRef<AbortController | null>(null);
 
   const refresh = async () => {
     const res = await fetch('/api/projects');
@@ -77,7 +97,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
     }
   };
 
-  // AI 大纲生成
+  // AI 大纲生成（SSE 流式）
   const createFromOutline = async () => {
     if (!outline.trim()) {
       toast.error('请输入大纲');
@@ -87,8 +107,16 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
       toast.error('大纲太短了，至少写 10 个字');
       return;
     }
+
     setGenerating(true);
     setLastError(null);
+    setProgressMsg('准备中…');
+    setProgressPercent(0);
+    setStageStates({});
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch('/api/projects/from-outline', {
         method: 'POST',
@@ -97,26 +125,132 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
           outline: outline.trim(),
           name: outlineName.trim() || undefined,
         }),
+        signal: controller.signal,
       });
-      const data = await res.json();
+
       if (!res.ok) {
-        const errMsg = data.error || 'AI 解析失败';
-        setLastError(errMsg);
-        throw new Error(errMsg);
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
       }
+
+      // 解析 SSE 流
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalResult: any = null;
+      let streamError: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE: 每个 event 以 \n\n 分隔
+        let idx: number;
+        while ((idx = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          let eventType = 'message';
+          let dataStr = '';
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              dataStr += line.slice(5).trim();
+            }
+          }
+          if (!dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+
+            if (eventType === 'progress') {
+              setProgressMsg(data.message || '');
+              setProgressPercent(data.progress || 0);
+
+              // 更新阶段状态
+              if (data.stage && STAGES.some(s => s.key === data.stage)) {
+                setStageStates(prev => {
+                  const next = { ...prev };
+                  // 标记之前的阶段为 done
+                  const currentIdx = STAGES.findIndex(s => s.key === data.stage);
+                  for (let i = 0; i < currentIdx; i++) {
+                    const k = STAGES[i].key;
+                    if (!next[k] || next[k].status === 'pending') {
+                      next[k] = { status: 'done' };
+                    }
+                  }
+                  next[data.stage] = {
+                    status: data.progress >= 100 && data.stage === 'done' ? 'done' : 'running',
+                    message: data.message,
+                  };
+                  return next;
+                });
+              }
+            } else if (eventType === 'done') {
+              finalResult = data;
+              // 标记所有阶段 done
+              setStageStates(prev => {
+                const next = { ...prev };
+                for (const s of STAGES) {
+                  next[s.key] = { status: 'done' };
+                }
+                return next;
+              });
+            } else if (eventType === 'error') {
+              streamError = data.error || '解析失败';
+              // 标记当前运行中阶段为 error
+              setStageStates(prev => {
+                const next = { ...prev };
+                for (const s of STAGES) {
+                  if (next[s.key]?.status === 'running') {
+                    next[s.key] = { status: 'error', message: streamError! };
+                  }
+                }
+                return next;
+              });
+            }
+          } catch (e) {
+            // ignore parse errors
+          }
+        }
+      }
+
+      if (streamError) {
+        setLastError(streamError);
+        throw new Error(streamError);
+      }
+
+      if (!finalResult) {
+        throw new Error('未收到完成信号');
+      }
+
       toast.success(
-        `AI 已生成：${data.name}（${data.characterCount} 角色 / ${data.plotNodeCount} 剧情节点）`
+        `AI 已生成：${finalResult.name}（${finalResult.characterCount} 角色 / ${finalResult.plotNodeCount} 节点 / ${finalResult.factionCount ?? 0} 势力）`
       );
       setOutline('');
       setOutlineName('');
       setLastError(null);
       await refresh();
-      onEnter(data.id, data.name);
+      onEnter(finalResult.id, finalResult.name);
     } catch (e: any) {
-      toast.error(e.message);
+      if (e.name === 'AbortError') {
+        toast.info('已取消');
+      } else {
+        setLastError(e.message);
+        toast.error(e.message);
+      }
     } finally {
       setGenerating(false);
+      abortRef.current = null;
     }
+  };
+
+  const cancelGeneration = () => {
+    abortRef.current?.abort();
+    setGenerating(false);
   };
 
   const deleteProject = async (id: string) => {
@@ -182,7 +316,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                   className="min-h-[140px] resize-y"
                   disabled={generating}
                 />
-                <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
                   <span>字数 {outline.length}</span>
                   {outline.length > 3000 && (
                     <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
@@ -194,12 +328,12 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                       超长，建议精简到 5000 字内
                     </Badge>
                   )}
-                  <span>· AI 会解析为：场景、角色（含性格/目标/关系）、剧情节点</span>
+                  <span>· AI 会解析为：世界观、角色档案、剧情节点</span>
                 </div>
               </div>
 
               {/* 示例 */}
-              {!outline && (
+              {!outline && !generating && (
                 <div className="flex flex-wrap gap-1.5">
                   <span className="text-xs text-muted-foreground py-1">参考示例：</span>
                   {OUTLINE_EXAMPLES.map((ex, i) => (
@@ -212,6 +346,69 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                       {ex.slice(0, 24)}…
                     </button>
                   ))}
+                </div>
+              )}
+
+              {/* 进度展示 */}
+              {generating && (
+                <div className="border rounded-md p-4 bg-muted/30 space-y-3">
+                  {/* 当前消息 */}
+                  <div className="flex items-center gap-2 text-sm">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="font-medium">{progressMsg}</span>
+                    <span className="ml-auto text-muted-foreground">{progressPercent}%</span>
+                  </div>
+
+                  {/* 进度条 */}
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-500 ease-out"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+
+                  {/* 阶段步骤 */}
+                  <div className="grid grid-cols-5 gap-2">
+                    {STAGES.map((s) => {
+                      const state = stageStates[s.key] ?? { status: 'pending' };
+                      const Icon = s.icon;
+                      return (
+                        <div
+                          key={s.key}
+                          className={`flex flex-col items-center gap-1 p-2 rounded-md border text-center transition-all ${
+                            state.status === 'done'
+                              ? 'border-green-300 bg-green-50 text-green-700'
+                              : state.status === 'running'
+                              ? 'border-primary bg-primary/5 text-primary'
+                              : state.status === 'error'
+                              ? 'border-destructive bg-destructive/5 text-destructive'
+                              : 'border-muted text-muted-foreground'
+                          }`}
+                        >
+                          {state.status === 'done' ? (
+                            <CheckCircle2 className="h-4 w-4" />
+                          ) : state.status === 'running' ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : state.status === 'error' ? (
+                            <AlertCircle className="h-4 w-4" />
+                          ) : (
+                            <Icon className="h-4 w-4" />
+                          )}
+                          <span className="text-[10px] font-medium">{s.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 取消按钮 */}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="w-full text-xs"
+                    onClick={cancelGeneration}
+                  >
+                    取消生成
+                  </Button>
                 </div>
               )}
 
@@ -242,7 +439,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                 {generating ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    {outline.length > 3000 ? '压缩 + 解析中…（约 20-60 秒）' : 'AI 解析中…（约 10-30 秒）'}
+                    AI 工作中…
                   </>
                 ) : (
                   <>

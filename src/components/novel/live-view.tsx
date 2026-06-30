@@ -308,6 +308,17 @@ function CharacterPanel({
                   {c.currentState.level && (
                     <div>Lv {c.currentState.level} · HP {c.currentState.hp} · MP {c.currentState.mp}</div>
                   )}
+                  {/* 性格标签 */}
+                  {c.persona.personality?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {c.persona.personality.map((p, i) => (
+                        <Badge key={i} variant="outline" className="text-[10px]">
+                          {p}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {/* 关系 */}
                   <div className="flex flex-wrap gap-1 mt-1">
                     {Object.entries(c.currentState.relationships ?? {}).map(([name, r]: any) => (
                       <Badge
@@ -324,6 +335,76 @@ function CharacterPanel({
                     ))}
                   </div>
                 </div>
+
+                {/* 深度档案 - 可展开 */}
+                {(c.persona.backstory || c.persona.growthArc || c.persona.innerConflict || c.persona.secrets?.length) && (
+                  <details className="mt-2 group">
+                    <summary className="text-xs font-medium cursor-pointer text-primary hover:underline flex items-center gap-1">
+                      <BookOpen className="h-3 w-3" />
+                      角色档案
+                      <span className="text-muted-foreground group-open:hidden">（点击展开）</span>
+                    </summary>
+                    <div className="mt-2 space-y-2 text-xs">
+                      {c.persona.backstory && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">背景故事</div>
+                          <div className="text-muted-foreground leading-relaxed">{c.persona.backstory}</div>
+                        </div>
+                      )}
+                      {c.persona.growthArc && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">成长弧线</div>
+                          <div className="text-muted-foreground leading-relaxed">{c.persona.growthArc}</div>
+                        </div>
+                      )}
+                      {c.persona.innerConflict && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">内在冲突</div>
+                          <div className="text-muted-foreground leading-relaxed italic">{c.persona.innerConflict}</div>
+                        </div>
+                      )}
+                      {c.persona.motivations?.length > 0 && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">动机层次</div>
+                          <ul className="text-muted-foreground space-y-0.5 ml-3 list-disc">
+                            {c.persona.motivations.map((m, i) => <li key={i}>{m}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                      {c.persona.secrets?.length > 0 && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">秘密</div>
+                          <ul className="text-muted-foreground space-y-0.5 ml-3 list-disc">
+                            {c.persona.secrets.map((s, i) => <li key={i} className="italic">{s}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                      {c.persona.speechHabits?.length > 0 && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">说话习惯</div>
+                          <div className="text-muted-foreground">{c.persona.speechHabits.join('；')}</div>
+                        </div>
+                      )}
+                      {c.persona.appearance && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">外貌</div>
+                          <div className="text-muted-foreground">{c.persona.appearance}</div>
+                        </div>
+                      )}
+                      {c.persona.skills?.length > 0 && (
+                        <div>
+                          <div className="font-medium text-foreground mb-0.5">技能</div>
+                          <div className="flex flex-wrap gap-1">
+                            {c.persona.skills.map((s, i) => (
+                              <Badge key={i} variant="outline" className="text-[10px]">{s}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
+
                 <Button
                   size="sm" variant="ghost" className="h-6 mt-2 w-full text-xs"
                   onClick={() => onEdit(c)}
@@ -470,6 +551,90 @@ function InterventionPanel({
       </div>
 
       <Separator />
+
+      {/* 世界观设定（来自大纲） */}
+      {worldState?.worldLore && (
+        <>
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Globe className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold">世界观设定</h3>
+            </div>
+            <details className="group">
+              <summary className="text-xs cursor-pointer text-primary hover:underline">
+                {worldState.worldLore.prelude?.slice(0, 60) || worldState.worldLore.premise?.slice(0, 60) || '点击展开'}
+                <span className="text-muted-foreground ml-1 group-open:hidden">…</span>
+              </summary>
+              <div className="mt-2 space-y-2 text-xs">
+                {worldState.worldLore.premise && (
+                  <div>
+                    <div className="font-medium text-foreground">故事前提</div>
+                    <div className="text-muted-foreground">{worldState.worldLore.premise}</div>
+                  </div>
+                )}
+                {worldState.worldLore.worldBackground && (
+                  <div>
+                    <div className="font-medium text-foreground">世界背景</div>
+                    <div className="text-muted-foreground leading-relaxed">{worldState.worldLore.worldBackground}</div>
+                  </div>
+                )}
+                {worldState.worldLore.timeline && (
+                  <div>
+                    <div className="font-medium text-foreground">时间线</div>
+                    <div className="text-muted-foreground">{worldState.worldLore.timeline}</div>
+                  </div>
+                )}
+                {worldState.worldLore.geography?.length > 0 && (
+                  <div>
+                    <div className="font-medium text-foreground">重要地点</div>
+                    <ul className="text-muted-foreground space-y-0.5 ml-3 list-disc">
+                      {worldState.worldLore.geography.map((g, i) => <li key={i}>{g}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {worldState.worldLore.factions?.length > 0 && (
+                  <div>
+                    <div className="font-medium text-foreground">势力</div>
+                    <div className="space-y-1">
+                      {worldState.worldLore.factions.map((f, i) => (
+                        <div key={i} className="p-1.5 rounded border bg-muted/30">
+                          <div className="flex items-center gap-1">
+                            <span className="font-medium">{f.name}</span>
+                            <Badge variant="outline" className={`text-[9px] ${
+                              f.stance === '敌对' ? 'border-red-500 text-red-700' :
+                              f.stance === '友好' ? 'border-green-500 text-green-700' : ''
+                            }`}>{f.stance}</Badge>
+                          </div>
+                          <div className="text-muted-foreground mt-0.5">{f.description}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {worldState.worldLore.rules?.length > 0 && (
+                  <div>
+                    <div className="font-medium text-foreground">世界规则</div>
+                    <ul className="text-muted-foreground space-y-0.5 ml-3 list-disc">
+                      {worldState.worldLore.rules.map((r, i) => <li key={i}>{r}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {worldState.worldLore.themes?.length > 0 && (
+                  <div>
+                    <div className="font-medium text-foreground">主题</div>
+                    <div className="flex flex-wrap gap-1">
+                      {worldState.worldLore.themes.map((t, i) => (
+                        <Badge key={i} variant="outline" className="text-[10px]">{t}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </details>
+          </div>
+          <Separator />
+        </>
+      )}
 
       {/* 剧情节点（来自大纲） */}
       {worldState?.plotNodes && worldState.plotNodes.length > 0 && (

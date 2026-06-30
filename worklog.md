@@ -82,3 +82,49 @@ Stage Summary:
   - 重写 src/components/novel/setup-panel.tsx（Tabs 双模式）
   - 修改 src/components/novel/live-view.tsx（剧情节点面板）
 - 截图：/home/z/my-project/download/novelstudio-outline-mode.png
+
+---
+Task ID: 18-23 (进度反馈 + 角色丰满度)
+Agent: main (super-z)
+Task: 用户反馈 1.进度不及时以为失败 2.角色和背景不够丰满（200w 字长篇支撑）
+
+Work Log:
+- 扩展类型字段：
+  - WorldLore: premise / worldBackground / geography / factions / rules / themes / timeline
+  - CharacterPersona: backstory / growthArc / innerConflict / secrets / motivations / speechHabits / appearance
+- 重构 outline-parser 为 5 阶段流水线（每阶段独立 LLM 调用）：
+  1. compressOutline   — 超长大纲压缩
+  2. buildWorldLore    — 构建世界观（背景/势力/地理/规则/主题）
+  3. buildCharacters   — 角色深度档案（背景故事/成长弧线/内在冲突/秘密/动机层次）
+  4. buildPlotNodes    — 拆解剧情节点
+  5. assembleWorldState — 组装并保存
+- 每阶段通过 ProgressCallback 上报进度（stage/message/progress 0-100/detail）
+- API 改为 SSE (Server-Sent Events) 流式返回：
+  - event:progress 每阶段进度
+  - event:done 完成信号（含项目 ID）
+  - event:error 错误信息
+- 前端 SetupPanel 接入 SSE：
+  - 实时进度条（0-100%）
+  - 5 阶段步骤指示器（压缩/世界观/角色/剧情/保存），每阶段显示 pending/running/done/error 状态
+  - 取消按钮（AbortController）
+  - 错误时显示红色卡片 + 重试按钮
+- LiveView 增强：
+  - 角色面板加"角色档案"可展开区域（背景故事/成长弧线/内在冲突/动机/秘密/说话习惯/外貌/技能）
+  - 右栏新增"世界观设定"面板（故事前提/世界背景/时间线/地点/势力/规则/主题）
+- Agent Browser 验证（修真界大纲测试）：
+  - 进度实时显示：20% 构建世界观 → 55% 设计角色 → 完成
+  - 生成 4 个角色，每个有完整深度档案
+  - 苏寒角色档案实测：背景故事 300+字 / 成长弧线 / 内在冲突 / 2 个秘密 / 动机层次 / 外貌 / 技能
+  - 世界观：5 大宗门势力 / 故事前提 / 世界背景
+
+Stage Summary:
+- 解决"以为失败"问题：5 阶段进度条 + 步骤指示器，用户实时看到 AI 在做什么
+- 解决"不丰满"问题：多步 LLM 调用，每步专注一方面，角色有 8 个深度字段，世界观有 7 个维度
+- 适合 200w 字长篇：角色有成长弧线和秘密可作为伏笔，世界观有势力和规则支撑后续剧情
+- 文件变更：
+  - 重写 src/lib/novel/agents/outline-parser.ts（5 阶段流水线）
+  - 重写 src/app/api/projects/from-outline/route.ts（SSE 流式）
+  - 扩展 src/lib/novel/types.ts（+WorldLore, +角色深度字段）
+  - 重写 src/components/novel/setup-panel.tsx（SSE 进度 UI）
+  - 修改 src/components/novel/live-view.tsx（角色档案展开 + 世界观面板）
+- 截图：/home/z/my-project/download/novelstudio-rich-characters.png

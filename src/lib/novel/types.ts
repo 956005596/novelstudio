@@ -32,6 +32,14 @@ export interface CharacterPersona {
   attributes?: Record<string, number>;
   skills?: string[];
   equipment?: string[];
+  // === 长篇深度字段 ===
+  backstory?: string;          // 详细背景故事（300-500 字）
+  growthArc?: string;          // 成长弧线（从哪里来，到哪里去）
+  innerConflict?: string;      // 内在冲突/矛盾
+  secrets?: string[];          // 角色秘密
+  motivations?: string[];      // 动机层次（表层/深层）
+  speechHabits?: string[];     // 口头禅/语言习惯
+  appearance?: string;         // 外貌特征
 }
 
 export interface CharacterState {
@@ -60,6 +68,17 @@ export interface PlotNode {
   completed: boolean;
 }
 
+/** 世界观设定（用于 200w 字长篇的背景支撑） */
+export interface WorldLore {
+  premise: string;                  // 故事前提/核心命题
+  worldBackground: string;          // 世界观背景（300-500 字详细描述）
+  geography: string[];              // 重要地点列表（含简述）
+  factions: { name: string; description: string; stance: string }[];  // 势力/组织
+  rules: string[];                  // 世界规则（魔法体系/科技水平/社会法则）
+  themes: string[];                 // 主题与母题
+  timeline: string;                 // 故事时间线/历史背景
+}
+
 export interface WorldState {
   sceneName: string;
   sceneDescription: string;
@@ -71,6 +90,7 @@ export interface WorldState {
   turn: number;
   plotNodes?: PlotNode[];        // 大纲解析出的剧情节点，供 Director 作为骨架
   writerHint?: string;           // 来自大纲的额外风格提示
+  worldLore?: WorldLore;         // 世界观设定（长篇支撑）
 }
 
 export interface WorldTemplate {
