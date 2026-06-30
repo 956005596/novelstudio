@@ -143,21 +143,92 @@ export async function chatStream(
 /**
  * 尝试从 LLM 输出中提取 JSON 对象。
  * LLM 偶尔会加 ```json fence 或前后说明文本，这里做容错。
+ * 也处理被截断的 JSON（自动补全闭合括号）。
  */
 export function extractJSON<T = any>(raw: string): T | null {
   if (!raw) return null;
-  // 1. 尝试直接 parse
-  try { return JSON.parse(raw) as T; } catch {}
-  // 2. 尝试从 ```json ... ``` 中提取
+
+  // 1. 去掉 markdown fence
+  let text = raw;
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) {
-    try { return JSON.parse(fence[1].trim()) as T; } catch {}
+    text = fence[1].trim();
+  } else {
+    // 找第一个 { 到最后一个 }
+    const first = raw.indexOf('{');
+    const last = raw.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      text = raw.slice(first, last + 1);
+    } else if (first >= 0) {
+      // 有 { 但没有 }，可能是截断
+      text = raw.slice(first);
+    }
   }
-  // 3. 尝试找到第一个 { 到最后一个 }
-  const first = raw.indexOf('{');
-  const last = raw.lastIndexOf('}');
-  if (first >= 0 && last > first) {
-    try { return JSON.parse(raw.slice(first, last + 1)) as T; } catch {}
+
+  // 2. 直接尝试
+  try { return JSON.parse(text) as T; } catch {}
+
+  // 3. 截断修复：补全缺失的闭合符号
+  const repaired = repairTruncatedJSON(text);
+  if (repaired !== text) {
+    try { return JSON.parse(repaired) as T; } catch {}
   }
+
+  // 4. 宽松模式：去掉尾随逗号
+  const loose = text.replace(/,(\s*[}\]])/g, '$1');
+  try { return JSON.parse(loose) as T; } catch {}
+
+  // 5. 宽松 + 修复
+  const looseRepaired = repairTruncatedJSON(loose);
+  if (looseRepaired !== loose) {
+    try { return JSON.parse(looseRepaired) as T; } catch {}
+  }
+
   return null;
+}
+
+/**
+ * 修复被截断的 JSON：统计未闭合的 { 和 [，补全对应数量的 } 和 ]
+ */
+function repairTruncatedJSON(text: string): string {
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (c === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '{') openBraces++;
+    else if (c === '}') openBraces--;
+    else if (c === '[') openBrackets++;
+    else if (c === ']') openBrackets--;
+  }
+
+  // 如果在字符串中间被截断，先闭合字符串
+  let result = text;
+  if (inString) {
+    result += '"';
+  }
+
+  // 去掉尾随的逗号或冒号
+  result = result.replace(/[\s,:]+$/, '');
+
+  // 补全闭合符号
+  result += ']'.repeat(Math.max(0, openBrackets));
+  result += '}'.repeat(Math.max(0, openBraces));
+
+  return result;
 }

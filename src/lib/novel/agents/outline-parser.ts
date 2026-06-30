@@ -11,6 +11,12 @@
  *   - 一句话："退役剑士回归新服，被旧仇人队友陷害，副本里反杀"
  *   - 多段：开局/转折/高潮/结局
  *   - 章节：第1章 入口集合；第2章 Boss 战；第3章 装备分配冲突
+ *   - 长大纲：8000+ 字详细剧本也支持，会先压缩再解析
+ *
+ * 超长大纲处理策略：
+ *   - 输入 > 3000 字时，先调用 LLM 压缩成结构化摘要（保留核心剧情/角色/转折）
+ *   - 再用压缩后的摘要走标准解析流程
+ *   - 避免单次 LLM 调用输入过长导致输出截断或格式错误
  */
 
 import { chat, extractJSON, type ChatMessage } from '../llm';
@@ -23,21 +29,66 @@ import type {
 } from '../types';
 import { getTemplate } from '../templates/online-game';
 
+// 长大纲阈值：超过此字数先压缩
+const LONG_OUTLINE_THRESHOLD = 3000;
+// 压缩后目标字数
+const COMPRESSED_TARGET = 1500;
+// LLM 输出 max tokens（中文需要更多 token，给 8000）
+const PARSE_MAX_TOKENS = 8000;
+
 export interface ParsedOutline {
-  templateKey: string;            // online-game | female-audience | business | custom
-  templateReason: string;         // 为什么选这个模板
+  templateKey: string;
+  templateReason: string;
   worldState: WorldState;
   characters: Omit<Character, 'id'>[];
   plotNodes: PlotNode[];
-  writerHint?: string;            // 给 Writer 的额外风格提示
+  writerHint?: string;
 }
 
 export interface PlotNode {
   index: number;
-  title: string;                  // 节点标题
-  description: string;            // 节点描述
-  targetTurn?: number;            // 预期在第几个 Turn 触发
+  title: string;
+  description: string;
+  targetTurn?: number;
   completed: boolean;
+}
+
+/**
+ * 压缩超长大纲：保留核心剧情/角色/转折，去掉冗余描写
+ */
+async function compressOutline(longOutline: string): Promise<string> {
+  const sysPrompt = `你是 NovelStudio 的大纲压缩器。用户输入了一份超长小说大纲（${longOutline.length} 字），请把它压缩为 ${COMPRESSED_TARGET} 字左右的结构化摘要。
+
+# 压缩原则
+1. **保留**：所有角色名、核心剧情节点、关键转折、人物关系、矛盾冲突
+2. **去掉**：环境描写的细节、心理活动、对话原文、场景氛围
+3. **结构化**：按"背景-角色-剧情节点"组织
+4. **不丢信息**：压缩后 AI 还能基于此生成完整 World State
+
+# 输出格式
+\`\`\`
+背景：一句话概括故事背景
+
+角色：
+- 角色名（身份）：核心目标 / 与他人关系
+- ...
+
+剧情节点：
+1. 节点1（开局）：描述
+2. 节点2（转折）：描述
+...
+\`\`\`
+
+只输出压缩后的大纲，不要任何说明文字。`;
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: sysPrompt },
+    { role: 'user', content: longOutline },
+  ];
+
+  const compressed = await chat(messages, { temperature: 0.3, maxTokens: 2500 });
+  console.log(`[OutlineParser] 长大纲压缩：${longOutline.length} → ${compressed.length} 字`);
+  return compressed.trim();
 }
 
 function buildSystemPrompt(): string {
@@ -127,7 +178,9 @@ function buildSystemPrompt(): string {
 - 不要输出 JSON 之外的任何内容
 - presentCharacterIds 留空数组，后端会自动填充
 - relationships 必须互相填写（A 对 B 有关系，B 对 A 也要有）
-- 网游模板必须有 attributes/skills/equipment，其他模板可省略`;
+- 网游模板必须有 attributes/skills/equipment，其他模板可省略
+- **输出要精简**：background 控制在 100 字内，description 控制在 50 字内，避免输出超长被截断
+- **确保 JSON 完整闭合**：最后必须是 \`}\` 结尾，不能中途截断`;
 }
 
 export async function parseOutline(outline: string): Promise<ParsedOutline> {
@@ -136,10 +189,32 @@ export async function parseOutline(outline: string): Promise<ParsedOutline> {
     throw new Error('大纲不能为空');
   }
 
+  console.log(`[OutlineParser] 输入大纲 ${trimmed.length} 字`);
+
+  // 长大纲先压缩
+  let workOutline = trimmed;
+  let wasCompressed = false;
+  if (trimmed.length > LONG_OUTLINE_THRESHOLD) {
+    console.log(`[OutlineParser] 大纲超长（${trimmed.length} > ${LONG_OUTLINE_THRESHOLD}），启动压缩`);
+    try {
+      workOutline = await compressOutline(trimmed);
+      wasCompressed = true;
+      if (!workOutline || workOutline.length < 50) {
+        throw new Error('压缩后大纲为空或过短');
+      }
+    } catch (err: any) {
+      console.error('[OutlineParser] 压缩失败，降级用原文前 3000 字:', err.message);
+      workOutline = trimmed.slice(0, 3000);
+    }
+  }
+
   const userPrompt = `# 用户大纲
 """
-${trimmed}
+${workOutline}
 """
+
+${wasCompressed ? `# 注意
+以上是经过压缩的大纲摘要（原文 ${trimmed.length} 字 → 压缩 ${workOutline.length} 字），请基于摘要生成结构化数据。` : ''}
 
 # 任务
 请把以上大纲解析为结构化数据。如果大纲信息不足，你可以合理补充细节，但要保持与大纲一致的核心剧情走向。`;
@@ -151,7 +226,7 @@ ${trimmed}
 
   let raw: string;
   try {
-    raw = await chat(messages, { temperature: 0.7, maxTokens: 4000 });
+    raw = await chat(messages, { temperature: 0.7, maxTokens: PARSE_MAX_TOKENS });
   } catch (err: any) {
     console.error('[OutlineParser] LLM 调用失败:', err.message);
     throw new Error(`AI 服务暂时不可用: ${err.message}（请稍后重试）`);
@@ -161,7 +236,8 @@ ${trimmed}
     throw new Error('AI 返回为空，请重试');
   }
 
-  console.log('[OutlineParser] LLM 原始输出前 500 字:', raw.slice(0, 500));
+  console.log(`[OutlineParser] LLM 原始输出 ${raw.length} 字，前 500 字:`, raw.slice(0, 500));
+  console.log('[OutlineParser] LLM 原始输出后 300 字:', raw.slice(-300));
 
   const parsed = extractJSON<any>(raw);
 

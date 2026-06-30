@@ -173,7 +173,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
               </div>
               <div>
                 <label className="text-sm font-medium mb-1.5 block">
-                  故事大纲 <span className="text-muted-foreground">（一句话简介 / 多段剧情 / 章节列表都行）</span>
+                  故事大纲 <span className="text-muted-foreground">（一句话简介 / 多段剧情 / 章节列表都行，超 3000 字会自动压缩）</span>
                 </label>
                 <Textarea
                   value={outline}
@@ -182,8 +182,19 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                   className="min-h-[140px] resize-y"
                   disabled={generating}
                 />
-                <div className="text-xs text-muted-foreground mt-1">
-                  字数 {outline.length} · AI 会解析为：场景、角色（含性格/目标/关系）、剧情节点
+                <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                  <span>字数 {outline.length}</span>
+                  {outline.length > 3000 && (
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+                      长大纲，将自动压缩
+                    </Badge>
+                  )}
+                  {outline.length > 10000 && (
+                    <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50">
+                      超长，建议精简到 5000 字内
+                    </Badge>
+                  )}
+                  <span>· AI 会解析为：场景、角色（含性格/目标/关系）、剧情节点</span>
                 </div>
               </div>
 
@@ -230,11 +241,13 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
               >
                 {generating ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" /> AI 解析中…（约 10-30 秒）
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    {outline.length > 3000 ? '压缩 + 解析中…（约 20-60 秒）' : 'AI 解析中…（约 10-30 秒）'}
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4 mr-1" /> AI 生成世界并进入
+                    <Sparkles className="h-4 w-4 mr-1" />
+                    {outline.length > 3000 ? 'AI 压缩并生成世界' : 'AI 生成世界并进入'}
                   </>
                 )}
               </Button>
