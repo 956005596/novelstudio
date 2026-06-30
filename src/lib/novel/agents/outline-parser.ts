@@ -26,7 +26,7 @@ import type {
 // 长大纲阈值
 const LONG_OUTLINE_THRESHOLD = 3000;
 const COMPRESSED_TARGET = 1500;
-const PARSE_MAX_TOKENS = 6000;
+const PARSE_MAX_TOKENS = 8000;
 
 export type ProgressStage =
   | 'compressing'     // 压缩超长大纲
@@ -179,7 +179,7 @@ async function buildWorldLore(
 }
 
 // ============================================================
-// 阶段 3：设计角色深度档案
+// 阶段 3：设计角色深度档案（带截断重试）
 // ============================================================
 async function buildCharacters(
   outline: string,
@@ -193,79 +193,50 @@ async function buildCharacters(
     progress: 55,
   });
 
-  const sysPrompt = `你是 NovelStudio 的角色设计师，负责为长篇小说设计丰满的角色档案。
-
-# 任务
-基于大纲和世界观，设计 2-4 个核心角色。每个角色都要有深度，不能扁平化。
-
-# 当前风格模板：${templateKey}
-${templateKey === 'online-game'
-    ? '网游模板：必须有 attributes/skills/equipment，技能名用「」括起，等级/装备/属性要具体'
-    : '通用模板：可省略 attributes/skills/equipment'}
-
-# 世界观背景（角色要与此契合）
-${worldLore.worldBackground}
-
-# 输出格式（严格 JSON）
-\`\`\`json
-{
-  "characters": [
-    {
-      "name": "角色名",
-      "role": "protagonist" | "antagonist" | "npc",
-      "persona": {
-        "background": "一句话背景",
-        "backstory": "详细背景故事（300-500 字，包括身世/关键经历/转折点/与他人的渊源）",
-        "personality": ["性格1", "性格2", "性格3"],
-        "goals": ["短期目标1", "长期目标2"],
-        "stance": "立场和价值观（一句话）",
-        "speechStyle": "说话风格（一句话）",
-        "speechHabits": ["口头禅1", "语言习惯1"],
-        "growthArc": "成长弧线：从X状态→到Y状态，经历什么转变（100-200 字）",
-        "innerConflict": "内在冲突/矛盾（如：责任vs情感、野心vs良知）",
-        "secrets": ["角色秘密1（其他角色不知道的）", "秘密2"],
-        "motivations": ["表层动机", "深层动机"],
-        "appearance": "外貌特征（100 字内）",
-        "attributes": {"力量": 20, "敏捷": 15},
-        "skills": ["「技能1」", "「技能2」"],
-        "equipment": ["装备1", "装备2"]
-      },
-      "currentState": {
-        "emotion": "初始情绪",
-        "location": "初始位置",
-        "relationships": {
-          "另一角色名": {"value": 30, "note": "关系说明（含历史渊源）"}
-        },
-        "hp": 100,
-        "mp": 50,
-        "level": 1,
-        "buffs": []
-      }
-    }
-  ]
-}
-\`\`\`
-
-# 设计原则
-1. **冲突优先**：角色之间必须有张力，至少一个角色有"表面立场"和"真实立场"的差距
-2. **深度**：backstory 要够丰满，让角色有"为什么是这样的人"的合理性
-3. **成长空间**：growthArc 要明确，让角色在 200w 字里有变化
-4. **秘密**：每个角色至少 1 个秘密，可作为后续剧情伏笔
-5. **关系网**：relationships 必须互相填写，note 要含历史渊源
-6. **不扁平**：反派也要有合理动机，不要纯粹恶
-
-只输出 JSON，不要说明文字。确保 JSON 完整闭合。`;
-
+  const sysPrompt = buildCharacterPrompt(worldLore, templateKey);
   const messages: ChatMessage[] = [
     { role: 'system', content: sysPrompt },
     { role: 'user', content: `# 用户大纲\n"""\n${outline}\n"""` },
   ];
 
-  const raw = await chat(messages, { temperature: 0.75, maxTokens: PARSE_MAX_TOKENS });
-  const parsed = extractJSON<any>(raw);
+  let raw = '';
+  let parsed: any = null;
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    try {
+      onProgress({
+        stage: 'characters',
+        message: attempts === 1
+          ? '正在设计角色深度档案…'
+          : `角色设计第 ${attempts} 次尝试（上次输出被截断，精简重试）…`,
+        progress: 55,
+      });
+
+      // 第二次起用精简 prompt
+      const useMessages = attempts === 1 ? messages : [
+        { role: 'system', content: buildCharacterPrompt(worldLore, templateKey, true) },
+        { role: 'user', content: `# 用户大纲\n"""\n${outline}\n"""` },
+      ];
+
+      raw = await chat(useMessages, { temperature: 0.7, maxTokens: PARSE_MAX_TOKENS });
+      parsed = extractJSON<any>(raw);
+
+      if (parsed && Array.isArray(parsed.characters) && parsed.characters.length > 0) {
+        break; // 成功
+      }
+
+      console.warn(`[OutlineParser] 角色解析第 ${attempts} 次失败，raw 长度 ${raw.length}`);
+    } catch (err: any) {
+      console.error(`[OutlineParser] 角色设计第 ${attempts} 次 LLM 错误:`, err.message);
+      if (attempts === maxAttempts) throw err;
+    }
+  }
 
   if (!parsed || !Array.isArray(parsed.characters) || parsed.characters.length === 0) {
-    console.error('[OutlineParser] 角色解析失败，raw:', raw.slice(0, 500));
+    console.error('[OutlineParser] 角色解析最终失败，raw 前 500 字:', raw.slice(0, 500));
     throw new Error('角色设计失败，请重试');
   }
 
@@ -324,8 +295,117 @@ ${worldLore.worldBackground}
   return characters;
 }
 
+function buildCharacterPrompt(worldLore: WorldLore, templateKey: string, simplified = false): string {
+  const loreContext = `# 世界观背景（角色要与此契合）
+${worldLore.worldBackground}`;
+
+  if (simplified) {
+    // 精简版：减少字段要求，确保输出完整
+    return `你是 NovelStudio 的角色设计师。基于大纲和世界观，设计 2-3 个核心角色。
+
+${loreContext}
+
+# 输出格式（严格 JSON，确保完整闭合）
+\`\`\`json
+{
+  "characters": [
+    {
+      "name": "角色名",
+      "role": "protagonist" | "antagonist" | "npc",
+      "persona": {
+        "background": "一句话背景",
+        "backstory": "背景故事（100-150 字）",
+        "personality": ["性格1", "性格2"],
+        "goals": ["目标1"],
+        "stance": "立场",
+        "speechStyle": "说话风格",
+        "growthArc": "成长弧线（50 字）",
+        "innerConflict": "内在冲突",
+        "secrets": ["秘密1"],
+        "motivations": ["表层", "深层"],
+        ${templateKey === 'online-game' ? '"attributes": {"力量": 20},\n        "skills": ["技能1"],\n        "equipment": ["装备1"],' : ''}
+        "appearance": "外貌"
+      },
+      "currentState": {
+        "emotion": "情绪",
+        "location": "位置",
+        "relationships": {"另一角色": {"value": 30, "note": "关系"}},
+        ${templateKey === 'online-game' ? '"hp": 100, "mp": 50, "level": 1,' : ''}
+        "buffs": []
+      }
+    }
+  ]
+}
+\`\`\`
+
+只输出 JSON，不要说明。确保 JSON 完整闭合，最后一个字符必须是 \`}\`。`;
+  }
+
+  return `你是 NovelStudio 的角色设计师，负责为长篇小说设计丰满的角色档案。
+
+# 任务
+基于大纲和世界观，设计 2-4 个核心角色。每个角色都要有深度，不能扁平化。
+
+# 当前风格模板：${templateKey}
+${templateKey === 'online-game'
+    ? '网游模板：必须有 attributes/skills/equipment，技能名用「」括起，等级/装备/属性要具体'
+    : '通用模板：可省略 attributes/skills/equipment'}
+
+${loreContext}
+
+# 输出格式（严格 JSON）
+\`\`\`json
+{
+  "characters": [
+    {
+      "name": "角色名",
+      "role": "protagonist" | "antagonist" | "npc",
+      "persona": {
+        "background": "一句话背景",
+        "backstory": "详细背景故事（200-300 字，包括身世/关键经历/转折点）",
+        "personality": ["性格1", "性格2", "性格3"],
+        "goals": ["短期目标1", "长期目标2"],
+        "stance": "立场和价值观（一句话）",
+        "speechStyle": "说话风格（一句话）",
+        "speechHabits": ["口头禅1"],
+        "growthArc": "成长弧线：从X→到Y，经历什么转变（80-150 字）",
+        "innerConflict": "内在冲突/矛盾（一句话）",
+        "secrets": ["角色秘密1"],
+        "motivations": ["表层动机", "深层动机"],
+        "appearance": "外貌特征（50 字内）",
+        "attributes": {"力量": 20, "敏捷": 15},
+        "skills": ["「技能1」", "「技能2」"],
+        "equipment": ["装备1", "装备2"]
+      },
+      "currentState": {
+        "emotion": "初始情绪",
+        "location": "初始位置",
+        "relationships": {
+          "另一角色名": {"value": 30, "note": "关系说明（含历史渊源）"}
+        },
+        "hp": 100,
+        "mp": 50,
+        "level": 1,
+        "buffs": []
+      }
+    }
+  ]
+}
+\`\`\`
+
+# 设计原则
+1. **冲突优先**：角色之间必须有张力，至少一个角色有"表面立场"和"真实立场"的差距
+2. **深度**：backstory 要够丰满，让角色有"为什么是这样的人"的合理性
+3. **成长空间**：growthArc 要明确，让角色在 200w 字里有变化
+4. **秘密**：每个角色至少 1 个秘密，可作为后续剧情伏笔
+5. **关系网**：relationships 必须互相填写，note 要含历史渊源
+6. **不扁平**：反派也要有合理动机，不要纯粹恶
+
+只输出 JSON，不要说明文字。确保 JSON 完整闭合。`;
+}
+
 // ============================================================
-// 阶段 4：拆解剧情节点
+// 阶段 4：拆解剧情节点（网状结构：主线+支线+伏笔+日常）
 // ============================================================
 async function buildPlotNodes(
   outline: string,
@@ -335,19 +415,39 @@ async function buildPlotNodes(
 ): Promise<PlotNode[]> {
   onProgress({
     stage: 'plot-nodes',
-    message: '正在拆解剧情节点：开局→转折→高潮→结局…',
+    message: '正在拆解网状剧情：主线 + 支线 + 伏笔 + 日常缓冲…',
     progress: 85,
   });
 
   const charNames = characters.map(c => c.name).join('、');
+  const factionsCount = worldLore.factions?.length ?? 0;
+  const geographyCount = worldLore.geography?.length ?? 0;
 
-  const sysPrompt = `你是 NovelStudio 的剧情架构师，负责把大纲拆解为可演绎的剧情节点。
+  const sysPrompt = `你是 NovelStudio 的剧情架构师，负责为 200w 字长篇小说构建网状剧情结构。
 
 # 任务
-基于大纲和已有角色，生成 5-10 个剧情节点，作为 Director 推进剧情的骨架。
+基于大纲、世界观和角色，生成 **15-25 个剧情节点**，形成网状叙事结构，支撑长篇连载。
 
 # 角色
 ${charNames}
+
+# 世界观要素
+- ${factionsCount} 个势力（可作支线来源）
+- ${geographyCount} 个地点（可作场景切换）
+- 主题：${worldLore.themes?.join('、') ?? '未明确'}
+
+# 节点类型（必须混搭，不能全是主线）
+1. **main（主线）**：5-8 个，必经剧情，priority 5，estimatedTurns 8-15
+2. **sub（支线）**：5-8 个，角色个人线/势力博弈/世界事件，priority 3-4，estimatedTurns 4-8
+3. **foreshadow（伏笔）**：3-5 个，埋线索/暗示/悬念，priority 2-3，estimatedTurns 2-4
+4. **daily（日常缓冲）**：2-4 个，关系戏/休息/世界观展示，priority 1，estimatedTurns 2-4
+
+# 节奏原则（200w 字长篇）
+- **慢热**：前 5 个 Turn 不要推进主线，先日常+伏笔铺垫
+- **起伏**：高潮段（main 高 tension）后必接缓冲段（daily 低 tension）
+- **交织**：主线:支线 ≈ 1:2，每个主线节点前后穿插支线
+- **悬念**：每 3-5 个节点埋一个伏笔，后续节点回收
+- **角色线**：每个主要角色至少 1 条个人支线
 
 # 输出格式（严格 JSON）
 \`\`\`json
@@ -356,20 +456,25 @@ ${charNames}
     {
       "index": 1,
       "title": "节点标题（4-8 字）",
-      "description": "节点描述（50-100 字，含戏剧目标和关键事件）",
+      "description": "节点描述（80-150 字，含戏剧目标和关键事件）",
+      "nodeType": "main" | "sub" | "foreshadow" | "daily",
+      "priority": 1-5,
+      "estimatedTurns": 2-15,
       "targetTurn": 2,
+      "linkedCharacters": ["角色名1", "角色名2"],
+      "tensionLevel": 0-10,
+      "subNodes": ["子阶段1", "子阶段2"],
       "completed": false
     }
   ]
 }
 \`\`\`
 
-# 拆解原则
-1. 第一个节点是"开局铺垫"，最后一个节点是"高潮/结局"
-2. 中间节点要有起伏：铺垫→冲突→转折→危机→解决→新冲突
-3. targetTurn 间隔 2-4，让每个节点能充分演绎
-4. description 要具体，让 Director 知道"这个节点要发生什么"
-5. 节点之间要有因果链，不能跳跃
+# 排序原则
+- 按 targetTurn 升序排列
+- 第一个节点通常是 daily 或 foreshadow（铺垫）
+- 主线节点均匀分布，不要扎堆
+- 伏笔节点要在对应回收主线之前
 
 只输出 JSON，不要说明文字。确保 JSON 完整闭合。`;
 
@@ -378,32 +483,52 @@ ${charNames}
     { role: 'user', content: `# 用户大纲\n"""\n${outline}\n"""` },
   ];
 
-  const raw = await chat(messages, { temperature: 0.6, maxTokens: 3000 });
+  const raw = await chat(messages, { temperature: 0.7, maxTokens: 5000 });
   const parsed = extractJSON<any>(raw);
 
   if (!parsed || !Array.isArray(parsed.plotNodes)) {
     console.error('[OutlineParser] 剧情节点解析失败，raw:', raw.slice(0, 500));
-    // 降级：返回默认节点
-    return [
-      { index: 1, title: '开场', description: '故事开场', targetTurn: 1, completed: false },
-      { index: 2, title: '推进', description: '剧情推进', targetTurn: 4, completed: false },
-      { index: 3, title: '高潮', description: '高潮冲突', targetTurn: 8, completed: false },
-    ];
+    // 降级：返回基础网状节点
+    return buildFallbackPlotNodes();
   }
 
-  onProgress({
-    stage: 'plot-nodes',
-    message: `剧情节点拆解完成：${parsed.plotNodes.length} 个节点`,
-    progress: 95,
-  });
-
-  return parsed.plotNodes.map((n: any, i: number) => ({
+  const nodes: PlotNode[] = parsed.plotNodes.map((n: any, i: number) => ({
     index: n.index ?? i + 1,
     title: n.title ?? `节点${i + 1}`,
     description: n.description ?? '',
+    nodeType: n.nodeType ?? 'main',
+    priority: n.priority ?? 3,
+    estimatedTurns: n.estimatedTurns ?? 5,
     targetTurn: n.targetTurn,
+    linkedCharacters: n.linkedCharacters ?? [],
+    tensionLevel: n.tensionLevel ?? 5,
+    subNodes: n.subNodes ?? [],
     completed: false,
   }));
+
+  // 按 targetTurn 排序
+  nodes.sort((a, b) => (a.targetTurn ?? 0) - (b.targetTurn ?? 0));
+  // 重建 index
+  nodes.forEach((n, i) => { n.index = i + 1; });
+
+  onProgress({
+    stage: 'plot-nodes',
+    message: `网状剧情拆解完成：${nodes.length} 个节点（主线 ${nodes.filter(n => n.nodeType === 'main').length} / 支线 ${nodes.filter(n => n.nodeType === 'sub').length} / 伏笔 ${nodes.filter(n => n.nodeType === 'foreshadow').length} / 日常 ${nodes.filter(n => n.nodeType === 'daily').length}）`,
+    progress: 95,
+  });
+
+  return nodes;
+}
+
+/** 降级节点生成（当 LLM 失败时） */
+function buildFallbackPlotNodes(): PlotNode[] {
+  return [
+    { index: 1, title: '日常开场', description: '角色日常互动，展示世界观', nodeType: 'daily', priority: 1, estimatedTurns: 3, targetTurn: 1, tensionLevel: 2, completed: false },
+    { index: 2, title: '伏笔埋设', description: '埋下关键线索', nodeType: 'foreshadow', priority: 2, estimatedTurns: 2, targetTurn: 4, tensionLevel: 3, completed: false },
+    { index: 3, title: '主线启动', description: '主线剧情开启', nodeType: 'main', priority: 5, estimatedTurns: 10, targetTurn: 7, tensionLevel: 6, completed: false },
+    { index: 4, title: '支线展开', description: '角色个人线', nodeType: 'sub', priority: 3, estimatedTurns: 5, targetTurn: 12, tensionLevel: 5, completed: false },
+    { index: 5, title: '主线推进', description: '主线第一次转折', nodeType: 'main', priority: 5, estimatedTurns: 8, targetTurn: 18, tensionLevel: 7, completed: false },
+  ];
 }
 
 // ============================================================
@@ -474,6 +599,9 @@ export async function parseOutline(
     plotNodes,
     writerHint: worldResult.writerHint,
     worldLore: worldResult.worldLore,
+    pacingMode: 'slow',            // 默认慢热模式（200w 字长篇）
+    currentMainNodeIndex: 0,
+    turnsSinceLastMain: 0,
   };
 
   progress({

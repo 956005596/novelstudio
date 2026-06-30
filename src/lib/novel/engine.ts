@@ -38,6 +38,12 @@ import { writerStream, saveChapter } from './agents/writer';
 const TURN_DELAY_MS = 4000;      // 每个 turn 之间的间隔，给前端时间消化 + 避免 LLM 限流
 const WRITER_CHUNK_THRESHOLD = 8; // 累积多少事件触发 Writer（即使 Director 没主动触发）
 
+/** 判断当前 Turn 是否达到节点完成阈值 */
+function nextWorld_turnReached(currentTurn: number, threshold: number, node: any): boolean {
+  // 如果当前 Turn 超过 targetTurn + estimatedTurns，认为节点应该完成
+  return currentTurn >= threshold;
+}
+
 export interface EngineCallbacks {
   emit: (event: SocketOutEvent) => void;
   isPaused: () => boolean;
@@ -206,10 +212,34 @@ export class NovelEngine {
     }
 
     // === 6. 更新 World State ===
+    // 判断本 Turn 是否推进了主线节点（通过 Director commentary 或 injection 内容判断）
+    const directorText = (decision.commentary ?? '') + ' ' + (decision.injections ?? []).map(i => i.content).join(' ');
+    const advancedMainNode = /节点|推进|主线|完成/.test(directorText) && /主线|main/i.test(directorText);
+
+    // 节点完成检测：如果 Director 注入的事件提到"完成"某节点，标记完成
+    let updatedPlotNodes = worldState.plotNodes;
+    if (updatedPlotNodes && updatedPlotNodes.length > 0) {
+      const nextNode = updatedPlotNodes.find(n => !n.completed);
+      if (nextNode) {
+        // 简单 heuristic：如果 Director 注入提到节点标题或"完成"，且当前 Turn 超过 targetTurn + estimatedTurns
+        const turnThreshold = (nextNode.targetTurn ?? 0) + (nextNode.estimatedTurns ?? 5);
+        const mentionsNode = directorText.includes(nextNode.title) || /节点完成|节点\d+.*完成/.test(directorText);
+        if (mentionsNode || nextWorld_turnReached(worldState.turn + 1, turnThreshold, nextNode)) {
+          updatedPlotNodes = updatedPlotNodes.map(n =>
+            n.index === nextNode.index ? { ...n, completed: true } : n
+          );
+          this.emitLog('info', `节点完成：${nextNode.title}（${nextNode.nodeType}）`);
+        }
+      }
+    }
+
     const nextWorld: WorldState = {
       ...worldState,
       turn: worldState.turn + 1,
       tension: Math.max(0, Math.min(10, worldState.tension + decision.tensionDelta)),
+      plotNodes: updatedPlotNodes,
+      turnsSinceLastMain: advancedMainNode ? 0 : (worldState.turnsSinceLastMain ?? 0) + 1,
+      currentMainNodeIndex: updatedPlotNodes?.findIndex(n => n.nodeType === 'main' && !n.completed) ?? worldState.currentMainNodeIndex,
       ...(decision.nextScenePatch ?? {}),
     };
     await this.wm.saveWorldState(nextWorld);

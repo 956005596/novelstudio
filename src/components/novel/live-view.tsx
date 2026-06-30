@@ -681,22 +681,97 @@ function InterventionPanel({
                 {worldState.plotNodes.filter((n: any) => n.completed).length}/{worldState.plotNodes.length}
               </Badge>
             </div>
-            <div className="space-y-1.5">
-              {worldState.plotNodes.map((n: any) => (
-                <div
-                  key={n.index}
-                  className={`text-xs p-2 rounded border ${
-                    n.completed ? 'bg-green-50 border-green-200 line-through opacity-60' : 'bg-amber-50 border-amber-200'
+            {/* 节点类型统计 */}
+            <div className="flex flex-wrap gap-1 mb-2 text-[10px]">
+              {(['main', 'sub', 'foreshadow', 'daily'] as const).map(t => {
+                const count = worldState.plotNodes.filter((n: any) => n.nodeType === t).length;
+                if (count === 0) return null;
+                const label = t === 'main' ? '主线' : t === 'sub' ? '支线' : t === 'foreshadow' ? '伏笔' : '日常';
+                const color = t === 'main' ? 'border-rose-300 text-rose-700 bg-rose-50' :
+                              t === 'sub' ? 'border-blue-300 text-blue-700 bg-blue-50' :
+                              t === 'foreshadow' ? 'border-purple-300 text-purple-700 bg-purple-50' :
+                              'border-green-300 text-green-700 bg-green-50';
+                return (
+                  <Badge key={t} variant="outline" className={`text-[9px] ${color}`}>
+                    {label} {count}
+                  </Badge>
+                );
+              })}
+            </div>
+            <ScrollArea className="max-h-[300px]">
+              <div className="space-y-1.5 pr-2">
+                {worldState.plotNodes.map((n: any) => {
+                  const typeColor = n.nodeType === 'main' ? 'border-l-rose-500' :
+                                    n.nodeType === 'sub' ? 'border-l-blue-500' :
+                                    n.nodeType === 'foreshadow' ? 'border-l-purple-500' :
+                                    'border-l-green-500';
+                  const typeLabel = n.nodeType === 'main' ? '主线' : n.nodeType === 'sub' ? '支线' : n.nodeType === 'foreshadow' ? '伏笔' : '日常';
+                  return (
+                    <div
+                      key={n.index}
+                      className={`text-xs p-2 rounded border border-l-4 ${typeColor} ${
+                        n.completed ? 'bg-green-50 border-green-200 line-through opacity-60' : 'bg-amber-50 border-amber-200'
+                      }`}
+                    >
+                      <div className="font-medium flex items-center gap-1 flex-wrap">
+                        {n.completed ? '✓' : '○'} 节点{n.index} · {n.title}
+                        <Badge variant="outline" className="text-[9px]">{typeLabel}</Badge>
+                        {n.priority && <span className="text-[9px] text-muted-foreground">P{n.priority}</span>}
+                        {n.targetTurn && <span className="text-[9px] text-muted-foreground">T{n.targetTurn}</span>}
+                        {n.estimatedTurns && <span className="text-[9px] text-muted-foreground">~{n.estimatedTurns}T</span>}
+                      </div>
+                      <div className="text-muted-foreground mt-0.5">{n.description}</div>
+                      {n.linkedCharacters?.length > 0 && (
+                        <div className="flex flex-wrap gap-0.5 mt-1">
+                          {n.linkedCharacters.map((c: string, i: number) => (
+                            <span key={i} className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground">{c}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          </div>
+          <Separator />
+        </>
+      )}
+
+      {/* 节奏控制 */}
+      {worldState?.plotNodes && worldState.plotNodes.length > 0 && (
+        <>
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Activity className="h-4 w-4 text-primary" />
+              <h3 className="text-sm font-semibold">剧情节奏</h3>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {([
+                { key: 'fast', label: '快推进', desc: '每 2-3T 推进主线' },
+                { key: 'balanced', label: '平衡', desc: '每 4-6T 推进主线' },
+                { key: 'slow', label: '慢热', desc: '每 8-15T 推进主线' },
+              ] as const).map(m => (
+                <button
+                  key={m.key}
+                  onClick={() => store.setPacingMode(m.key)}
+                  className={`p-2 rounded-md border text-center transition-all ${
+                    worldState.pacingMode === m.key
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-muted text-muted-foreground hover:bg-accent'
                   }`}
+                  title={m.desc}
                 >
-                  <div className="font-medium flex items-center gap-1">
-                    {n.completed ? '✓' : '○'} 节点{n.index} · {n.title}
-                    {n.targetTurn && <span className="text-muted-foreground font-normal">(T{n.targetTurn})</span>}
-                  </div>
-                  <div className="text-muted-foreground mt-0.5">{n.description}</div>
-                </div>
+                  <div className="text-xs font-medium">{m.label}</div>
+                  <div className="text-[9px] opacity-80">{m.desc}</div>
+                </button>
               ))}
             </div>
+            {worldState.turnsSinceLastMain !== undefined && (
+              <div className="text-[10px] text-muted-foreground mt-1.5">
+                距上次主线推进：{worldState.turnsSinceLastMain} Turn
+              </div>
+            )}
           </div>
           <Separator />
         </>

@@ -54,6 +54,7 @@ interface NovelStoreState {
   sendCharacterEdit: (characterId: string, patch: Partial<Character['currentState']>) => void;
   sendWriterRewrite: (chapterId: string, content: string) => void;
   resetProject: (projectId: string) => Promise<void>;
+  setPacingMode: (mode: 'fast' | 'balanced' | 'slow') => void;
 
   // 内部
   _onWorldUpdate: (ws: WorldState) => void;
@@ -171,6 +172,11 @@ export const useNovelStore = create<NovelStoreState>((set, get) => ({
       projectStatus: 'idle',
     });
     get()._onLog('info', '项目已重置，可以重新启动演绎');
+  },
+
+  setPacingMode: (mode) => {
+    get().socket?.emit('world:edit', { patch: { pacingMode: mode } });
+    get()._onLog('info', `节奏模式已切换为：${mode === 'fast' ? '快推进' : mode === 'slow' ? '慢热' : '平衡'}`);
   },
 
   _onWorldUpdate: (ws) => set({ worldState: ws }),

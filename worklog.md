@@ -165,3 +165,54 @@ Stage Summary:
   - 修改 src/store/novel-store.ts（+resetProject 方法）
   - 修改 src/components/novel/live-view.tsx（+重置按钮 + 确认对话框 + resetting 状态）
 - 截图：/home/z/my-project/download/novelstudio-reset.png
+
+---
+Task ID: 28-33 (网状叙事 + 节奏控制，支撑 200w 字)
+Agent: main (super-z)
+Task: 用户反馈剧情节点走太快，要支撑 200w 字长篇
+
+Work Log:
+- 扩展 PlotNode 类型：nodeType(main/sub/foreshadow/daily) / subNodes / priority / estimatedTurns / linkedCharacters / tensionLevel
+- 扩展 WorldState：pacingMode(fast/balanced/slow) / currentMainNodeIndex / turnsSinceLastMain
+- 重构 outline-parser 阶段4 buildPlotNodes：
+  - 生成 15-25 个节点（原来 5-10 个）
+  - 4 种类型混搭：主线 5-8 / 支线 5-8 / 伏笔 3-5 / 日常 2-4
+  - 每个节点带 priority/estimatedTurns/tensionLevel/linkedCharacters
+  - 慢热原则：前 5 Turn 不推进主线
+  - 降级方案：LLM 失败时返回基础网状节点
+- Director 逻辑重构：
+  - system prompt 加入节奏控制原则（慢热/起伏/网状叙事/长篇思维）
+  - user prompt 显示当前节奏模式 + turnsSinceLastMain + 节点类型策略
+  - 主线推进频率限制：fast<2T / balanced<4T / slow<8T 禁止推进主线
+  - 节点类型感知：日常走低张力关系戏，伏笔埋线索，支线展开角色线，主线才推进核心
+- Engine 更新 World State：
+  - 检测节点完成（Director 提到节点标题 或 Turn 达到 targetTurn+estimatedTurns）
+  - 维护 turnsSinceLastMain（推进主线时归零，否则+1）
+  - 维护 currentMainNodeIndex
+  - emit 节点完成日志
+- 角色设计 buildCharacters 加截断重试（3 次，第二次起用精简 prompt）
+- 前端 LiveView 增强：
+  - 剧情节点面板：4 种类型用不同颜色边框（主线红/支线蓝/伏笔紫/日常绿）
+  - 节点类型统计 badge（主线 N / 支线 N / 伏笔 N / 日常 N）
+  - 节点显示 priority/targetTurn/estimatedTurns/linkedCharacters
+  - 新增"剧情节奏"面板：3 档可选（快推进/平衡/慢热），显示 turnsSinceLastMain
+- Agent Browser 验证（修真界大纲）：
+  - 生成 18 个节点（6 主线 + 5 支线 + 3 伏笔 + 4 日常）
+  - 主线节点分布在 T15/T27/T45/T55/T65/T80，间隔 10-15 Turn
+  - 启动演绎后 Turn 5 仍走日常铺垫，未推进主线
+  - 1/18 节点完成（日常节点），turnsSinceMain=5
+  - Director 旁白"考核官察觉异常，测试苏寒实力" — 在铺垫角色关系
+
+Stage Summary:
+- 解决"走太快"问题：网状叙事（主线:支线:伏笔:日常 = 6:5:3:4），主线间隔 10-15 Turn
+- 解决"支撑 200w 字"问题：18 个节点 × 平均 8 Turn × 每 Turn ~500 字 ≈ 7w 字/主线周期
+- 节奏可调：用户可随时切换快推进/平衡/慢热，Director 实时遵循
+- 节点类型感知：Director 知道当前是日常/伏笔/支线/主线，采取不同策略
+- 文件变更：
+  - 修改 src/lib/novel/types.ts（+NodeType, +PlotNode 字段, +PacingMode, +WorldState 字段）
+  - 重写 src/lib/novel/agents/outline-parser.ts（buildPlotNodes 网状生成 + buildCharacters 截断重试）
+  - 修改 src/lib/novel/agents/director.ts（节奏控制 + 节点类型感知）
+  - 修改 src/lib/novel/engine.ts（节点完成检测 + turnsSinceLastMain 维护）
+  - 修改 src/store/novel-store.ts（+setPacingMode）
+  - 修改 src/components/novel/live-view.tsx（节点类型显示 + 节奏控制面板）
+- 截图：/home/z/my-project/download/novelstudio-pacing-control.png

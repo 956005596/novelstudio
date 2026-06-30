@@ -82,9 +82,14 @@ ${lvlDesc}
 # 决策原则
 - **戏剧性优先**：冲突比和谐更有价值。如果角色都在合作没冲突，主动制造误会或意外
 - **角色一致性**：不要让角色做违反人设的事，宁可改剧情也不要扭曲角色
-- **节奏控制**：高潮段落（战斗、PK、对峙）连续推进；缓冲段落（休息、对话）不超过 2 个 turn
-- **目标推进**：每 3-5 个 turn 必须有角色目标进展，否则玩家会无聊
-- **网文爽点**：升级、装备掉落、打脸、装弱后翻盘是核心爽点，要密集安排
+- **节奏控制**：必须遵循当前节奏模式（fast/balanced/slow），不要急于推进主线
+- **节点类型感知**：日常节点走低张力关系戏，伏笔节点埋线索，支线节点展开角色个人线，主线节点才推进核心剧情
+- **慢热原则**：前 5 个 Turn 不要推进主线，先日常+伏笔铺垫世界观和角色关系
+- **起伏原则**：高潮段（main 高 tension）后必接缓冲段（daily 低 tension），让读者喘口气
+- **网状叙事**：主线:支线 ≈ 1:2，每个主线节点前后穿插支线，不要一条道走到黑
+- **目标推进**：每 3-5 个 Turn 必须有某种进展（主线或支线），否则玩家会无聊
+- **网文爽点**：升级、装备掉落、打脸、装弱后翻盘是核心爽点，但要间隔安排不要密集
+- **长篇思维**：这是 200w 字长篇，不要急着收尾，要敢于"留白"和"延宕"
 
 # 输出格式
 你必须严格输出 JSON，不要有任何前后说明。格式：
@@ -125,6 +130,34 @@ export async function directorDecide(
     worldState.presentCharacterIds.includes(c.id)
   );
 
+  const plotNodesInfo = (worldState.plotNodes && worldState.plotNodes.length > 0)
+    ? `# 剧情骨架（网状叙事，请遵循节奏）
+${worldState.plotNodes.map((n) => {
+  const typeLabel = n.nodeType === 'main' ? '【主线】' : n.nodeType === 'sub' ? '【支线】' : n.nodeType === 'foreshadow' ? '【伏笔】' : '【日常】';
+  return `- [${n.completed ? '✓' : ' '}] 节点${n.index} ${typeLabel} (T${n.targetTurn ?? '?'}, 优先级${n.priority ?? 3}, 预期${n.estimatedTurns ?? 5}T, 张力${n.tensionLevel ?? 5}): ${n.title} — ${n.description}`;
+}).join('\n')}
+
+**当前应推进的节点**：${(() => {
+  const next = worldState.plotNodes.find((n) => !n.completed);
+  return next ? `${next.nodeType === 'main' ? '【主线】' : next.nodeType === 'sub' ? '【支线】' : next.nodeType === 'foreshadow' ? '【伏笔】' : '【日常】'}${next.title}` : '全部已完成';
+})()}
+
+# 节奏控制（关键！）
+- **当前节奏模式**：${worldState.pacingMode === 'fast' ? '快推进（每 2-3 Turn 推进一次主线）' : worldState.pacingMode === 'slow' ? '慢热（每 8-15 Turn 才推进一次主线，中间走支线/日常）' : '平衡（每 4-6 Turn 推进一次主线）'}
+- **距离上次主线推进**：${worldState.turnsSinceLastMain ?? 0} Turn
+- **主线推进限制**：
+  - fast 模式：turnsSinceLastMain < 2 时，**禁止推进主线**，只能走支线/日常/伏笔
+  - balanced 模式：turnsSinceLastMain < 4 时，**禁止推进主线**
+  - slow 模式：turnsSinceLastMain < 8 时，**禁止推进主线**
+- **节点类型策略**：
+  - 日常节点（daily）：低张力，关系戏/世界观展示/角色互动，不推进主线
+  - 伏笔节点（foreshadow）：埋线索/暗示/悬念，张力略升但不爆点
+  - 支线节点（sub）：角色个人线/势力博弈/世界事件，可有冲突但不是主线高潮
+  - 主线节点（main）：核心剧情推进，高张力，但要充分演绎不要急于完成
+- **慢热原则**：前 5 个 Turn 不要推进主线，先日常+伏笔铺垫
+- **起伏原则**：高潮段（main 高 tension）后必接缓冲段（daily 低 tension）`
+    : '# 剧情骨架：无（自由演绎）';
+
   const userPrompt = `# 当前世界状态
 场景：${worldState.sceneName}
 位置：${worldState.location}
@@ -133,11 +166,7 @@ export async function directorDecide(
 Turn：${worldState.turn}
 场景描述：${worldState.sceneDescription}
 
-${(worldState.plotNodes && worldState.plotNodes.length > 0) ? `# 剧情骨架（来自用户大纲，请遵循）
-${worldState.plotNodes.map((n) => `- [${n.completed ? '✓' : ' '}] 节点${n.index} (T${n.targetTurn ?? '?'}): ${n.title} — ${n.description}`).join('\n')}
-
-**当前应推进的节点**：${worldState.plotNodes.find((n) => !n.completed)?.title ?? '全部已完成'}
-**节点推进原则**：每个节点要充分演绎（2-4 个 turn），不要急于跳到下一个；节点完成后世界状态应有明显变化。` : '# 剧情骨架：无（自由演绎）'}
+${plotNodesInfo}
 
 # 在场角色
 ${presentChars

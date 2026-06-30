@@ -60,12 +60,21 @@ export interface Character {
   currentState: CharacterState;
 }
 
+/** 节点类型：支撑网状叙事 */
+export type NodeType = 'main' | 'sub' | 'foreshadow' | 'daily';
+
 export interface PlotNode {
   index: number;
   title: string;
   description: string;
   targetTurn?: number;
   completed: boolean;
+  nodeType?: NodeType;          // main=主线 / sub=支线 / foreshadow=伏笔 / daily=日常缓冲
+  subNodes?: string[];           // 子节点描述（拆细一个节点为多个阶段）
+  priority?: number;             // 优先级 1-5，5=必经主线，1=可选日常
+  estimatedTurns?: number;       // 预期持续多少 Turn（主线 8-15，支线 4-8，日常 2-4）
+  linkedCharacters?: string[];   // 涉及的角色名
+  tensionLevel?: number;         // 该节点张力水平 0-10
 }
 
 /** 世界观设定（用于 200w 字长篇的背景支撑） */
@@ -91,7 +100,12 @@ export interface WorldState {
   plotNodes?: PlotNode[];        // 大纲解析出的剧情节点，供 Director 作为骨架
   writerHint?: string;           // 来自大纲的额外风格提示
   worldLore?: WorldLore;         // 世界观设定（长篇支撑）
+  pacingMode?: PacingMode;       // 节奏模式：快推进/平衡/慢热
+  currentMainNodeIndex?: number; // 当前主线节点索引
+  turnsSinceLastMain?: number;   // 距离上次主线推进多少 Turn（用于节奏控制）
 }
+
+export type PacingMode = 'fast' | 'balanced' | 'slow';
 
 export interface WorldTemplate {
   key: string;
