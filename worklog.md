@@ -242,3 +242,30 @@ Stage Summary:
 - 实时状态：Tab 标签显示字数/事件数，生成中有脉冲提示
 - 文件变更：仅修改 src/components/novel/live-view.tsx（+centerView state + Tab UI + fullHeight prop）
 - 截图：/home/z/my-project/download/novelstudio-tab-view.png
+
+---
+Task ID: 35 (修复分屏模式事件日志撑开问题)
+Agent: main (super-z)
+Task: 用户反馈事件日志越来越长，小说文本被挤到下面
+
+Work Log:
+- 根因：CSS grid-rows-2 子项缺少 min-h-0，内容增多时撑开行高
+- 修复：所有 grid/flex 容器及其子项加 min-h-0
+  - main 三栏容器 +min-h-0
+  - 左/右 aside +min-h-0
+  - 中栏 section +min-h-0
+  - 内容区 div +min-h-0
+  - split 模式 grid 容器 +min-h-0
+  - split 两个子 div +min-h-0
+  - EventLogPanel 根 div +min-h-0
+  - WriterPanel 根 div +min-h-0
+  - ScrollArea className +min-h-0
+- Agent Browser 验证（27 个事件 + 826 字 Writer 输出）：
+  - 两个面板高度严格相等：各 1569px（50/50 平分）
+  - 事件日志增多后不再撑开 Writer 区域
+  - ScrollArea viewport 正确约束内容高度
+
+Stage Summary:
+- 修复 CSS grid 经典问题：min-h-0 让 grid item 可以缩小到内容以下
+- 分屏模式严格 50/50，事件日志再多也不会挤压小说文本
+- 文件变更：仅修改 src/components/novel/live-view.tsx（全局加 min-h-0）

@@ -227,9 +227,9 @@ export function LiveView({ projectId, projectName, onBack }: {
       </header>
 
       {/* 三栏 */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] gap-px bg-border overflow-hidden">
+      <main className="flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] gap-px bg-border overflow-hidden min-h-0">
         {/* 左栏：角色面板 */}
-        <aside className="bg-background overflow-y-auto">
+        <aside className="bg-background overflow-y-auto min-h-0">
           <CharacterPanel
             characters={store.characters}
             worldState={store.worldState}
@@ -245,7 +245,7 @@ export function LiveView({ projectId, projectName, onBack }: {
         </aside>
 
         {/* 中栏：事件日志 + Writer 输出（Tab 切换 + 可调高度） */}
-        <section className="bg-background overflow-hidden flex flex-col">
+        <section className="bg-background overflow-hidden flex flex-col min-h-0">
           {/* Tab 切换 */}
           <div className="border-b bg-muted/30 flex items-center gap-1 px-2 py-1.5 flex-shrink-0">
             <button
@@ -281,23 +281,23 @@ export function LiveView({ projectId, projectName, onBack }: {
           </div>
 
           {/* 内容区 */}
-          <div className="flex-1 overflow-hidden flex flex-col">
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0">
             {centerView === 'writer' && (
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden min-h-0">
                 <WriterPanel text={fullWriterText} streamText={writerText} scrollRef={writerScrollRef} fullHeight />
               </div>
             )}
             {centerView === 'events' && (
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden min-h-0">
                 <EventLogPanel events={store.events} scrollRef={eventScrollRef} fullHeight />
               </div>
             )}
             {centerView === 'split' && (
-              <div className="flex-1 grid grid-rows-2 gap-px bg-border overflow-hidden">
-                <div className="bg-background overflow-hidden flex flex-col">
+              <div className="flex-1 grid grid-rows-2 gap-px bg-border overflow-hidden min-h-0">
+                <div className="bg-background overflow-hidden flex flex-col min-h-0">
                   <EventLogPanel events={store.events} scrollRef={eventScrollRef} />
                 </div>
-                <div className="bg-background overflow-hidden flex flex-col">
+                <div className="bg-background overflow-hidden flex flex-col min-h-0">
                   <WriterPanel text={fullWriterText} streamText={writerText} scrollRef={writerScrollRef} />
                 </div>
               </div>
@@ -306,7 +306,7 @@ export function LiveView({ projectId, projectName, onBack }: {
         </section>
 
         {/* 右栏：干预面板 */}
-        <aside className="bg-background overflow-y-auto">
+        <aside className="bg-background overflow-y-auto min-h-0">
           <InterventionPanel
             directorCmd={directorCmd}
             setDirectorCmd={setDirectorCmd}
@@ -512,7 +512,7 @@ function CharacterPanel({
 // ============== 事件日志 ==============
 function EventLogPanel({ events, scrollRef, fullHeight }: { events: NovelEvent[]; scrollRef: any; fullHeight?: boolean }) {
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       {!fullHeight && (
         <div className="px-4 py-2 border-b bg-muted/30 flex items-center gap-2 flex-shrink-0">
           <Activity className="h-4 w-4 text-primary" />
@@ -520,7 +520,7 @@ function EventLogPanel({ events, scrollRef, fullHeight }: { events: NovelEvent[]
           <span className="text-xs text-muted-foreground">({events.length})</span>
         </div>
       )}
-      <ScrollArea className="flex-1" ref={scrollRef}>
+      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-3 space-y-2">
           {events.length === 0 ? (
             <div className="text-center text-sm text-muted-foreground py-8">
@@ -560,7 +560,7 @@ function WriterPanel({ text, streamText, scrollRef, fullHeight }: {
   text: string; streamText: string; scrollRef: any; fullHeight?: boolean;
 }) {
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       {!fullHeight && (
         <div className="px-4 py-2 border-b bg-muted/30 flex items-center gap-2 flex-shrink-0">
           <FileText className="h-4 w-4 text-primary" />
@@ -573,7 +573,7 @@ function WriterPanel({ text, streamText, scrollRef, fullHeight }: {
           )}
         </div>
       )}
-      <ScrollArea className="flex-1" ref={scrollRef}>
+      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
         <div className="p-4 max-w-3xl mx-auto">
           {text ? (
             <article className="prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed">
