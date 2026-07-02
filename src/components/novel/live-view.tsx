@@ -3,7 +3,6 @@
 import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Slider } from '@/components/ui/slider';
 import {
@@ -160,9 +159,9 @@ export function LiveView({ projectId, projectName, onBack }: {
   const fullWriterText = completedText + (writerText ? '\n\n' + writerText : '');
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* 顶栏 */}
-      <header className="border-b bg-background/95 backdrop-blur sticky top-0 z-10">
+      <header className="border-b bg-background/95 backdrop-blur flex-shrink-0">
         <div className="px-4 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <Button variant="ghost" size="sm" onClick={onBack}>
@@ -512,7 +511,7 @@ function CharacterPanel({
 // ============== 事件日志 ==============
 function EventLogPanel({ events, scrollRef, fullHeight }: { events: NovelEvent[]; scrollRef: any; fullHeight?: boolean }) {
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {!fullHeight && (
         <div className="px-4 py-2 border-b bg-muted/30 flex items-center gap-2 flex-shrink-0">
           <Activity className="h-4 w-4 text-primary" />
@@ -520,7 +519,10 @@ function EventLogPanel({ events, scrollRef, fullHeight }: { events: NovelEvent[]
           <span className="text-xs text-muted-foreground">({events.length})</span>
         </div>
       )}
-      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+      >
         <div className="p-3 space-y-2">
           {events.length === 0 ? (
             <div className="text-center text-sm text-muted-foreground py-8">
@@ -550,7 +552,7 @@ function EventLogPanel({ events, scrollRef, fullHeight }: { events: NovelEvent[]
             })
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
@@ -560,7 +562,7 @@ function WriterPanel({ text, streamText, scrollRef, fullHeight }: {
   text: string; streamText: string; scrollRef: any; fullHeight?: boolean;
 }) {
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {!fullHeight && (
         <div className="px-4 py-2 border-b bg-muted/30 flex items-center gap-2 flex-shrink-0">
           <FileText className="h-4 w-4 text-primary" />
@@ -573,7 +575,10 @@ function WriterPanel({ text, streamText, scrollRef, fullHeight }: {
           )}
         </div>
       )}
-      <ScrollArea className="flex-1 min-h-0" ref={scrollRef}>
+      <div
+        ref={scrollRef}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+      >
         <div className="p-4 max-w-3xl mx-auto">
           {text ? (
             <article className="prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed">
@@ -585,7 +590,7 @@ function WriterPanel({ text, streamText, scrollRef, fullHeight }: {
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
@@ -752,8 +757,8 @@ function InterventionPanel({
                 );
               })}
             </div>
-            <ScrollArea className="max-h-[300px]">
-              <div className="space-y-1.5 pr-2">
+            <div className="max-h-[300px] overflow-y-auto overflow-x-hidden pr-1">
+              <div className="space-y-1.5">
                 {worldState.plotNodes.map((n: any) => {
                   const typeColor = n.nodeType === 'main' ? 'border-l-rose-500' :
                                     n.nodeType === 'sub' ? 'border-l-blue-500' :
@@ -786,7 +791,7 @@ function InterventionPanel({
                   );
                 })}
               </div>
-            </ScrollArea>
+            </div>
           </div>
           <Separator />
         </>
@@ -884,8 +889,11 @@ function InterventionPanel({
           <MessageSquare className="h-4 w-4 text-primary" />
           <h3 className="text-sm font-semibold">引擎日志</h3>
         </div>
-        <ScrollArea className="h-[180px]" ref={logScrollRef}>
-          <div className="space-y-1 pr-2">
+        <div
+          ref={logScrollRef}
+          className="h-[180px] overflow-y-auto overflow-x-hidden pr-1"
+        >
+          <div className="space-y-1">
             {logs.length === 0 ? (
               <div className="text-xs text-muted-foreground">无日志</div>
             ) : (
@@ -908,7 +916,7 @@ function InterventionPanel({
               ))
             )}
           </div>
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );

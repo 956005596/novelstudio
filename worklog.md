@@ -269,3 +269,33 @@ Stage Summary:
 - 修复 CSS grid 经典问题：min-h-0 让 grid item 可以缩小到内容以下
 - 分屏模式严格 50/50，事件日志再多也不会挤压小说文本
 - 文件变更：仅修改 src/components/novel/live-view.tsx（全局加 min-h-0）
+
+---
+Task ID: 36 (修复事件日志滚动 - 根本性修复)
+Agent: main (super-z)
+Task: 用户反馈事件日志不能滚动
+
+Work Log:
+- 根因诊断：main 元素高度 14174px（应为视口高度 ~800px）
+  - root div 用 min-h-screen 允许容器超过视口
+  - 导致所有子容器被内容撑开，ScrollArea 失效
+- 修复方案：
+  1. root div: min-h-screen → h-screen + overflow-hidden（严格约束视口高度）
+  2. header: 去掉 sticky + 加 flex-shrink-0（不参与 flex 撑开）
+  3. 所有 ScrollArea 替换为原生 div.overflow-y-auto（Radix ScrollArea 在动态高度场景不可靠）
+     - EventLogPanel: ScrollArea → div.overflow-y-auto
+     - WriterPanel: ScrollArea → div.overflow-y-auto
+     - 剧情节点面板: ScrollArea → div.overflow-y-auto
+     - 引擎日志面板: ScrollArea → div.overflow-y-auto
+  4. 移除未使用的 ScrollArea import
+- Agent Browser 验证（120 个历史事件）：
+  - main 高度从 14174px → 506px（受视口约束）
+  - 事件日志容器：scrollHeight=7023, clientHeight=453, canScroll=true ✅
+  - 全屏事件模式：滚动正常，scrollTop 可手动控制
+  - Writer 面板同样可滚动
+
+Stage Summary:
+- 根本性修复：h-screen + overflow-hidden 严格约束视口，所有子容器正确滚动
+- ScrollArea → 原生 overflow-y-auto：更可靠，避免 Radix 在动态高度场景的 viewport 撑开问题
+- 120 个事件在 453px 高度内滚动显示，不再撑开页面
+- 文件变更：仅修改 src/components/novel/live-view.tsx
