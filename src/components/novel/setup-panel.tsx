@@ -8,9 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2, AlertCircle, RotateCw, CheckCircle2, Globe, Users, GitBranch, BookMarked, Save } from 'lucide-react';
+import { BookOpen, Plus, Trash2, Play, ArrowRight, Sparkles, Loader2, AlertCircle, RotateCw, CheckCircle2, Globe, Users, GitBranch, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { onlineGameTemplate } from '@/lib/novel/templates/online-game';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 interface ProjectListItem {
   id: string;
@@ -20,7 +21,13 @@ interface ProjectListItem {
   currentTurn: number;
   directorLvl: number;
   createdAt: string;
-  _count: { characters: number; events: number; chapters: number };
+  _count: {
+    characters: number;
+    events: number;
+    chapters: number;
+    chapterDrafts?: number;
+    staleChapterDrafts?: number;
+  };
 }
 
 const OUTLINE_EXAMPLES = [
@@ -31,10 +38,11 @@ const OUTLINE_EXAMPLES = [
 
 // 阶段定义（用于进度展示）
 const STAGES = [
-  { key: 'compressing', label: '压缩大纲', icon: BookMarked },
+  { key: 'reading-outline', label: '读取大纲', icon: BookOpen },
   { key: 'world-lore', label: '构建世界观', icon: Globe },
   { key: 'characters', label: '设计角色', icon: Users },
   { key: 'plot-nodes', label: '拆解剧情', icon: GitBranch },
+  { key: 'long-form-plan', label: '长篇规划', icon: BookOpen },
   { key: 'saving', label: '保存项目', icon: Save },
 ] as const;
 
@@ -262,15 +270,18 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
 
   return (
     <div className="container mx-auto max-w-5xl py-8 px-4">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3">
-          <BookOpen className="h-8 w-8 text-primary" />
-          NovelStudio
-          <span className="text-sm font-normal text-muted-foreground">AI 演绎叙事引擎</span>
-        </h1>
-        <p className="text-muted-foreground">
-          多 Agent 自主演绎 · Director 调度冲突 · 实时生成小说文本 · 任意时刻干预校准
-        </p>
+      <div className="mb-8 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3">
+            <BookOpen className="h-8 w-8 text-primary" />
+            NovelStudio
+            <span className="text-sm font-normal text-muted-foreground">AI 演绎叙事引擎</span>
+          </h1>
+          <p className="text-muted-foreground">
+            多 Agent 自主演绎 · Director 调度冲突 · 实时生成小说文本 · 任意时刻干预校准
+          </p>
+        </div>
+        <ThemeToggle />
       </div>
 
       {/* 创建新项目 - 双模式 */}
@@ -307,7 +318,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
               </div>
               <div>
                 <label className="text-sm font-medium mb-1.5 block">
-                  故事大纲 <span className="text-muted-foreground">（一句话简介 / 多段剧情 / 章节列表都行，超 3000 字会自动压缩）</span>
+                  故事大纲 <span className="text-muted-foreground">（一句话简介 / 多段剧情 / 章节列表都行，长大纲会完整解析）</span>
                 </label>
                 <Textarea
                   value={outline}
@@ -319,13 +330,13 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                 <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
                   <span>字数 {outline.length}</span>
                   {outline.length > 3000 && (
-                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
-                      长大纲，将自动压缩
+                    <Badge variant="outline" className="text-blue-700 border-blue-300 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+                      长大纲，将按原文解析
                     </Badge>
                   )}
                   {outline.length > 10000 && (
-                    <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50">
-                      超长，建议精简到 5000 字内
+                    <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                      超长，解析会更慢
                     </Badge>
                   )}
                   <span>· AI 会解析为：世界观、角色档案、剧情节点</span>
@@ -377,7 +388,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                           key={s.key}
                           className={`flex flex-col items-center gap-1 p-2 rounded-md border text-center transition-all ${
                             state.status === 'done'
-                              ? 'border-green-300 bg-green-50 text-green-700'
+                              ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300'
                               : state.status === 'running'
                               ? 'border-primary bg-primary/5 text-primary'
                               : state.status === 'error'
@@ -444,7 +455,7 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4 mr-1" />
-                    {outline.length > 3000 ? 'AI 压缩并生成世界' : 'AI 生成世界并进入'}
+                    AI 生成世界并进入
                   </>
                 )}
               </Button>
@@ -505,13 +516,19 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
                         <Badge variant="outline">
                           {p.template === 'online-game' ? '网游升级' : p.template}
                         </Badge>
-                        <span>Turn {p.currentTurn}</span>
+                        <span>第 {p.currentTurn} 轮</span>
                         <span>·</span>
                         <span>{p._count.characters} 角色</span>
                         <span>·</span>
                         <span>{p._count.events} 事件</span>
                         <span>·</span>
-                        <span>{p._count.chapters} 章</span>
+                        <span>{p._count.chapters} 有效章</span>
+                        {(p._count.chapterDrafts ?? p._count.chapters) > p._count.chapters && (
+                          <>
+                            <span>·</span>
+                            <span>{p._count.chapterDrafts} 历史稿</span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>Director {p.directorLvl}/5</span>
                       </div>

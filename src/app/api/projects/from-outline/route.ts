@@ -17,6 +17,9 @@ import {
   type ProgressEvent,
 } from '@/lib/novel/agents/outline-parser';
 import type { WorldState } from '@/lib/novel/types';
+import { ensureChapterFocus } from '@/lib/novel/chapter-focus';
+import { ensureChapterCharacterSnapshot } from '@/lib/novel/chapter-character-snapshot';
+import { rowToCharacter } from '@/lib/novel/world-state';
 
 export const maxDuration = 180;
 export const dynamic = 'force-dynamic';
@@ -59,7 +62,7 @@ export async function POST(req: NextRequest) {
       };
 
       send('progress', {
-        stage: 'starting',
+        stage: 'reading-outline',
         message: '开始解析大纲…',
         progress: 1,
       });
@@ -103,14 +106,16 @@ export async function POST(req: NextRequest) {
           characterIds.push(row.id);
         }
 
-        const finalWorld: WorldState = {
+        const finalWorld: WorldState = ensureChapterFocus({
           ...parsed.worldState,
           presentCharacterIds: characterIds,
-        };
+        });
         await db.project.update({
           where: { id: project.id },
           data: { worldState: JSON.stringify(finalWorld) },
         });
+        const characterRows = await db.character.findMany({ where: { projectId: project.id } });
+        await ensureChapterCharacterSnapshot(project.id, finalWorld, characterRows.map(rowToCharacter), { overwrite: true });
 
         // === 完成 ===
         send('done', {

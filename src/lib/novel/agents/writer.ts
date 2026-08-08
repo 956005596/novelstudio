@@ -10,10 +10,21 @@
  *   4. 风格指南：来自 WorldTemplate.writerStyleGuide
  */
 
-import { chatStream, type ChatMessage } from '../llm';
+import { chatStream, toLLMUserMessage, type ChatMessage } from '../llm';
+import {
+  CHAPTER_WORD_TARGET_MAX,
+  CHAPTER_WORD_TARGET_MIN,
+  formatChapterWordTarget,
+} from '../chapter-policy';
+import { countReadableChars } from '../chapter-text';
+import { renderCharacterFactsForPrompt, renderStoryDesignForPrompt } from '../chapter-guardrails';
+import { renderChapterBridgeForPrompt, type ChapterBridgeContext } from '../chapter-continuity';
 import type {
   Character,
+  ChapterFocus,
+  NovelCraftLesson,
   NovelEvent,
+  StoryDesign,
   WorldTemplate,
 } from '../types';
 import type { WorldManager } from '../world-state';
@@ -26,6 +37,12 @@ export interface WriterContext {
   events: NovelEvent[];     // 本段要演绎的事件（按时间顺序）
   previousText?: string;    // 上一段已生成的文本（风格锚点）
   userRewrite?: string;     // 用户改写后的文本（如果有，作为新的风格锚点）
+  craftLessons?: NovelCraftLesson[];
+  currentChapter?: ChapterFocus;
+  storyDesign?: StoryDesign;
+  previousChapterBridge?: ChapterBridgeContext | null;
+  writerHint?: string;
+  writerCustomBrief?: string;
 }
 
 /**
@@ -60,6 +77,11 @@ export async function writerStream(
   onChunk: (delta: string) => void
 ): Promise<string> {
   const styleAnchor = (ctx.userRewrite ?? ctx.previousText ?? '').slice(-2000);
+  const chapterNo = ctx.currentChapter?.chapterNo ?? 1;
+  const previousChapterBridge = renderChapterBridgeForPrompt(ctx.previousChapterBridge);
+  const targetWordMin = ctx.currentChapter?.targetWordMin ?? CHAPTER_WORD_TARGET_MIN;
+  const targetWordMax = ctx.currentChapter?.targetWordMax ?? CHAPTER_WORD_TARGET_MAX;
+  const targetWordLabel = formatChapterWordTarget(targetWordMin, targetWordMax);
 
   const systemPrompt = `你是 NovelStudio 的 Writer Agent，负责把事件日志演绎为小说文本。
 
@@ -69,35 +91,73 @@ ${ctx.template.description}
 # 文字风格指南
 ${ctx.template.writerStyleGuide}
 
+# 叙事引擎任务
+你接收的是导演和角色共同演绎出来的一场戏。你的任务不是逐条翻译日志，而是把角色的动作、对话、微反应和因果接力转成正式小说正文。
+- 角色说过的话可以保留，但要放进自然场面里。
+- 角色没明说但动作已经体现的情绪，用动作、物象、停顿和环境反应写出来。
+- 战斗和危机场景优先写“发生了什么变化”，不要堆说明书。
+- 情感高潮处允许留白，少用解释性总结。
+- 禁止套话式描写，尤其避免“眼中闪过寒光”“气势陡然暴涨”“全场震惊”这类空句。
+${ctx.writerHint ? `\n# 项目写作提示\n${ctx.writerHint}` : ''}
+${ctx.writerCustomBrief ? `\n# Writer 补充\n${ctx.writerCustomBrief}` : ''}
+
 # 当前场景
 ${ctx.worldSceneName}
 ${ctx.worldSceneDescription}
 
-# 在场角色（用于保持角色声音一致）
-${ctx.characters
-  .map(
-    (c) =>
-      `## ${c.name}（${c.role}）
-- 性格：${c.persona.personality.join('、')}
-- 立场：${c.persona.stance}
-- 说话风格：${c.persona.speechStyle}`
-  )
-  .join('\n\n')}
+${chapterNo > 1 ? previousChapterBridge : '# 上一章正稿接续锚点：当前是第一章，无需章际接续。'}
+
+# 当前章方向（硬约束，必须优先于旧稿和普通事件日志）
+第 ${chapterNo} 章《${ctx.currentChapter?.title ?? '未命名章节'}》
+目标：${ctx.currentChapter?.goal ?? '-'}
+范围：${ctx.currentChapter?.scope ?? '-'}
+节拍：
+${ctx.currentChapter?.beats?.map((beat, index) => `${index + 1}. ${beat}`).join('\n') || '- 无'}
+护栏：
+${ctx.currentChapter?.constraints?.map((item) => `- ${item}`).join('\n') || '- 无'}
+
+# 篇幅约束
+- 本次 Writer 输出视为一章正文，目标篇幅：${targetWordLabel}。
+- 少于 ${targetWordMin} 可读字不要急着收尾；用动作、环境、对话、心理反应和余波把已发生事件写完整。
+- 超过 ${targetWordMax} 可读字必须压缩设定解释、群众惊呼和重复心理，尽快落到本章钩子。
+- 系统统计“可读字数”时会排除空格、换行和标点，但正文必须保留正常中文标点，不要写成无标点长段。
+- 为补足篇幅只能深化事件日志中已经发生的事，不能新增后续大节点、未来技能、未来装备或提前觉醒结果。
+
+# 人物基础设定库（硬约束，不能被旧稿、事件日志或模型惯性覆盖）
+${renderCharacterFactsForPrompt(ctx.characters)}
+
+# 当前剧情设计师/导演设计（高优先级，正文必须落实其中的本章拍点、点名角色和设定护栏）
+${renderStoryDesignForPrompt(ctx.storyDesign)}
 
 ${styleAnchor ? `# 风格锚点（最近文本，请保持风格连贯）
 """
 ${styleAnchor}
 """` : '# 风格锚点：这是开头，请奠定整体基调'}
 
+${ctx.craftLessons?.length ? `# 已沉淀的写作经验（本段必须吸收）
+${ctx.craftLessons.slice(-6).map((lesson, index) => {
+  const rules = [
+    lesson.summary,
+    ...lesson.writerGuidelines.slice(0, 3),
+    ...lesson.settingGuardrails.slice(0, 2),
+  ].filter(Boolean);
+  return `${index + 1}. ${rules.join('；')}`;
+}).join('\n')}` : ''}
+
 # 你的写作原则
 1. **演绎而非总结**：不要写"接下来发生了一场战斗"，要写出战斗本身——动作、对话、心理
-2. **事件 → 文本**：每个事件都要展开为具体的场景描写、对话、动作。可以重新组织顺序、补充细节，但不能改变事件本身
+2. **事件 → 因果链 → 文本**：先找出每个 Turn 的核心刺激和角色接力，再写成连续场面。可以重新组织句序、合并同类动作、补充过渡，但不能改变事件本身
 3. **角色声音**：对话要符合角色性格。主角话少，反派油滑，治疗细心
 4. **节奏控制**：高潮段落（战斗、PK）短句密集；缓冲段落可以放慢
 5. **网游元素**：技能名用「」括起，装备/属性可以稍作描写但不要堆砌数字
 6. **不写"未发生"的事**：只演绎事件日志中的内容，不要预测或推进未发生的事件
 7. **段落分明**：每段 2-5 句，对话独立成段
 8. **中文输出**：避免翻译腔，不要在段尾加英文标点
+9. **修复机械感**：不要按日志逐条翻译成“甲做了、乙做了、丙做了”。同一 Turn 内必须写出前后承接：谁造成了变化，谁看见并回应，回应又怎样改变现场
+10. **章节篇幅**：正文最终落在 ${targetWordLabel}；宁可压缩解释，也要保留连续场面和章末钩子
+11. **章际接续**：第 2 章及以后，开头必须先接住上一章正稿结尾。上一章没有写到的战斗、地点、怪物、组织流程，不能在本章第一句直接当成已经发生；需要先补过渡段。
+12. **不硬切镜头**：如果事件日志已经跳到战斗中段，你可以在不改变事件结果的前提下，先写“上一章余波 -> 场景变化 -> 危机逼近 -> 被迫行动”的桥，再进入事件日志。
+13. **成长反馈闭环**：如果当前章方向、导演设计或事件日志要求击杀后有经验/等级/掉落/奖励反馈，必须贴近有效贡献者写出短促、可结算的文本锚点，例如“苏见山眼前一闪：【经验 +20】”；不要写成长篇教学面板，也不要让无贡献者群体凭空涨经验。
 
 # 输出
 直接开始写小说正文，不要加标题、不要加"以下是文本"之类的元说明。`;
@@ -109,8 +169,11 @@ ${renderEventsAsScript(ctx.events, ctx.characters)}
 # 任务
 请把以上事件演绎为小说文本。要求：
 - 每个事件都要在文本中体现
+- 第 ${chapterNo} 章开头必须和上一章正稿结尾连贯；如果上一章结尾还停在某个冲击、选择、关系变化或场景余波，就先写余波和场景变化，再进入新行动或新危机
+- 同一 Turn 的事件要写成一条连续动作链，不要像多人各自独立行动
 - 角色对话要符合各自说话风格
 - 场景细节、动作描写、心理活动要饱满
+- 正文可读字数控制在 ${targetWordLabel}，这是硬约束；正常使用中文标点，不要为了计数删标点
 - 段落分明，节奏有张有弛
 - 直接开始正文，不要加任何元说明`;
 
@@ -119,10 +182,14 @@ ${renderEventsAsScript(ctx.events, ctx.characters)}
     { role: 'user', content: userPrompt },
   ];
 
-  return await chatStream(messages, onChunk, {
-    temperature: 0.88,
-    maxTokens: 2048,
-  });
+  try {
+    return await chatStream(messages, onChunk, {
+      temperature: 0.88,
+      maxTokens: 5000,
+    });
+  } catch (err) {
+    throw new Error(toLLMUserMessage(err));
+  }
 }
 
 /**
@@ -133,14 +200,19 @@ export async function saveChapter(
   sceneName: string,
   content: string,
   startTurn: number,
-  endTurn: number
+  endTurn: number,
+  chapterId?: string,
+  chapterMeta?: { chapterNo?: number; chapterTitle?: string }
 ): Promise<string> {
   const chapter = await db.chapter.create({
     data: {
+      ...(chapterId ? { id: chapterId } : {}),
       projectId: wm.projectId,
+      chapterNo: chapterMeta?.chapterNo,
+      chapterTitle: chapterMeta?.chapterTitle,
       sceneName,
       content,
-      wordCount: content.length,
+      wordCount: countReadableChars(content),
       startTurn,
       endTurn,
     },

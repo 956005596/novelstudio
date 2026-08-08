@@ -14,20 +14,62 @@ import type {
   CharacterPersona,
   CharacterState,
   NovelEvent,
+  ReaderReview,
   WorldState,
   WorldTemplate,
 } from './types';
 import { getTemplate } from './templates/online-game';
 import { v4 as uuid } from 'uuid';
+import { ensureChapterFocus } from './chapter-focus';
+import { ensureChapterCharacterSnapshot } from './chapter-character-snapshot';
+import { expRequiredForNextLevel } from './progression';
+import { DEFAULT_AGENT_POLICY, normalizeAgentPolicy } from './agent-policy';
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === '[object Object]'
+  );
+}
+
+function assertPlainPatch(value: unknown, label: string): asserts value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    throw new Error(`${label} 必须是对象补丁，不能是文本或数组`);
+  }
+}
+
+function stripNumericKeys<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !/^\d+$/.test(key))
+  ) as T;
+}
+
+function normalizeWorldStateJson(value: string): WorldState {
+  const parsed = JSON.parse(value);
+  assertPlainPatch(parsed, 'World State');
+  return ensureChapterFocus(stripNumericKeys(parsed) as unknown as WorldState);
+}
 
 /** 把 Prisma 行 → 前端 Character */
 export function rowToCharacter(row: any): Character {
+  const currentState = JSON.parse(row.currentState) as CharacterState;
+  const normalizedState: CharacterState =
+    typeof currentState.level === 'number'
+      ? {
+          ...currentState,
+          exp: currentState.exp ?? 0,
+          nextLevelExp: currentState.nextLevelExp ?? expRequiredForNextLevel(currentState.level),
+        }
+      : currentState;
+
   return {
     id: row.id,
     name: row.name,
     role: row.role,
     persona: JSON.parse(row.persona) as CharacterPersona,
-    currentState: JSON.parse(row.currentState) as CharacterState,
+    currentState: normalizedState,
   };
 }
 
@@ -48,6 +90,35 @@ export function rowToEvent(row: any): NovelEvent {
   };
 }
 
+function parseStringArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 把 Prisma 行 → ReaderReview */
+export function rowToReaderReview(row: any): ReaderReview {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    chapterId: row.chapterId,
+    readerId: row.readerId,
+    readerName: row.readerName,
+    focus: row.focus,
+    severity: row.severity,
+    summary: row.summary,
+    praise: row.praise,
+    problems: parseStringArray(row.problems),
+    suggestions: parseStringArray(row.suggestions),
+    exposedQuestions: parseStringArray(row.exposedQuestions),
+    createdAt: row.createdAt,
+  };
+}
+
 export class WorldManager {
   constructor(public projectId: string) {}
 
@@ -58,7 +129,14 @@ export class WorldManager {
       include: { characters: true },
     });
     if (!project) throw new Error(`Project ${this.projectId} not found`);
-    const worldState = JSON.parse(project.worldState) as WorldState;
+    let worldState = normalizeWorldStateJson(project.worldState);
+    if (!worldState.agentPolicy) {
+      worldState = { ...worldState, agentPolicy: normalizeAgentPolicy() };
+      await db.project.update({
+        where: { id: this.projectId },
+        data: { worldState: JSON.stringify(worldState) },
+      });
+    }
     const characters = project.characters.map(rowToCharacter);
     const template = getTemplate(project.template);
     return { project, worldState, characters, template };
@@ -74,11 +152,12 @@ export class WorldManager {
 
   /** 持久化 World State */
   async saveWorldState(worldState: WorldState) {
+    const next = ensureChapterFocus(stripNumericKeys(worldState as unknown as Record<string, unknown>) as unknown as WorldState);
     await db.project.update({
       where: { id: this.projectId },
       data: {
-        worldState: JSON.stringify(worldState),
-        currentTurn: worldState.turn,
+        worldState: JSON.stringify(next),
+        currentTurn: next.turn,
       },
     });
   }
@@ -92,6 +171,33 @@ export class WorldManager {
         currentState: JSON.stringify(character.currentState),
       },
     });
+  }
+
+  async saveCurrentChapterCharacterSnapshot(options: { overwrite?: boolean } = {}) {
+    const { worldState, characters } = await this.loadProject();
+    return ensureChapterCharacterSnapshot(this.projectId, worldState, characters, options);
+  }
+
+  /** 创建新角色。用于剧情推进中出现的长期重要人物；同名角色直接复用。 */
+  async createCharacter(character: Omit<Character, 'id'>): Promise<Character> {
+    const existing = await db.character.findFirst({
+      where: {
+        projectId: this.projectId,
+        name: character.name,
+      },
+    });
+    if (existing) return rowToCharacter(existing);
+
+    const row = await db.character.create({
+      data: {
+        projectId: this.projectId,
+        name: character.name,
+        role: character.role,
+        persona: JSON.stringify(character.persona),
+        currentState: JSON.stringify(character.currentState),
+      },
+    });
+    return rowToCharacter(row);
   }
 
   /** 追加事件（不可变，只能追加） */
@@ -137,10 +243,27 @@ export class WorldManager {
     return rows.reverse().map(rowToEvent);
   }
 
+  /** 获取当前章节范围内的事件：章节 startTurn 是边界，不把上一章最后一轮混进来。 */
+  async getChapterEvents(startTurn: number, endTurn: number): Promise<NovelEvent[]> {
+    const rows = await db.event.findMany({
+      where: {
+        projectId: this.projectId,
+        status: 'confirmed',
+        turn: {
+          gt: startTurn,
+          lte: endTurn,
+        },
+      },
+      orderBy: [{ turn: 'asc' }, { createdAt: 'asc' }],
+    });
+    return rows.map(rowToEvent);
+  }
+
   /** 应用 World State 补丁（用户干预） */
   async applyWorldPatch(patch: Partial<WorldState>): Promise<WorldState> {
+    assertPlainPatch(patch, 'World State 编辑');
     const { worldState } = await this.loadProject();
-    const next: WorldState = { ...worldState, ...patch };
+    const next: WorldState = ensureChapterFocus({ ...worldState, ...patch });
     await this.saveWorldState(next);
     return next;
   }
@@ -148,42 +271,83 @@ export class WorldManager {
   /** 应用角色状态补丁 */
   async applyCharacterPatch(
     characterId: string,
-    patch: Partial<CharacterState>
+    patch: Partial<CharacterState>,
+    personaPatch: Partial<CharacterPersona> = {}
   ): Promise<Character> {
+    assertPlainPatch(patch, '角色状态编辑');
+    assertPlainPatch(personaPatch, '角色档案编辑');
     const { characters } = await this.loadProject();
     const c = characters.find((x) => x.id === characterId);
     if (!c) throw new Error(`Character ${characterId} not found`);
     const next: Character = {
       ...c,
+      persona: { ...c.persona, ...personaPatch },
       currentState: { ...c.currentState, ...patch },
     };
     await this.saveCharacter(next);
+    const refreshed = await this.loadProject();
+    await ensureChapterCharacterSnapshot(
+      this.projectId,
+      refreshed.worldState,
+      refreshed.characters.map((character) => (character.id === next.id ? next : character)),
+      { overwrite: true }
+    );
     return next;
   }
 
   /** 把用户的 Director 指令存入待处理队列 */
-  async queueDirective(type: 'command' | 'world_state_edit' | 'text_rewrite', content: string) {
+  async queueDirective(
+    type: 'priority_command' | 'command' | 'world_state_edit' | 'text_rewrite',
+    content: string,
+    chapterNo?: number
+  ) {
+    const targetChapterNo = chapterNo ?? (await this.loadProject()).worldState.currentChapter?.chapterNo;
     return db.directive.create({
-      data: { projectId: this.projectId, type, content, status: 'pending' },
+      data: {
+        projectId: this.projectId,
+        chapterNo: targetChapterNo,
+        type,
+        content,
+        status: 'pending',
+      },
     });
   }
 
-  /** 取出并标记 directive 为 applied */
-  async consumePendingDirectives() {
+  private sortDirectivesByPriority<T extends { type: string; createdAt: Date }>(items: T[]): T[] {
+    const priorityRank = (type: string) => (type === 'priority_command' ? 0 : 1);
+    return [...items].sort((a, b) => {
+      const byPriority = priorityRank(a.type) - priorityRank(b.type);
+      if (byPriority !== 0) return byPriority;
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
+  }
+
+  /** 只读查看待处理指令，用于演绎前设计，不改变指令状态。 */
+  async peekPendingDirectives(chapterNo: number) {
     const items = await db.directive.findMany({
-      where: { projectId: this.projectId, status: 'pending' },
+      where: { projectId: this.projectId, chapterNo, status: 'pending' },
       orderBy: { createdAt: 'asc' },
     });
+    return this.sortDirectivesByPriority(items);
+  }
+
+  /** 取出并标记 directive 为 applied */
+  async consumePendingDirectives(chapterNo: number) {
+    const items = await db.directive.findMany({
+      where: { projectId: this.projectId, chapterNo, status: 'pending' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const sorted = this.sortDirectivesByPriority(items);
     if (items.length === 0) return [];
     await db.directive.updateMany({
       where: { id: { in: items.map((i) => i.id) } },
       data: { status: 'applied' },
     });
-    return items;
+    return sorted;
   }
 
   /** 设置项目状态 */
-  async setProjectStatus(status: 'setup' | 'running' | 'paused' | 'ended') {
+  async setProjectStatus(status: 'setup' | 'idle' | 'running' | 'paused' | 'ended') {
     await db.project.update({
       where: { id: this.projectId },
       data: { status },
@@ -199,7 +363,7 @@ export async function createProject(
   templateKey: string = 'online-game'
 ): Promise<string> {
   const tpl = getTemplate(templateKey);
-  const initialWorld: WorldState = {
+  const initialWorld: WorldState = ensureChapterFocus({
     sceneName: tpl.initialScene.name,
     sceneDescription: tpl.initialScene.description,
     location: tpl.initialScene.location,
@@ -208,7 +372,8 @@ export async function createProject(
     worldFlags: {},
     tension: 3,
     turn: 0,
-  };
+    agentPolicy: { ...DEFAULT_AGENT_POLICY },
+  });
 
   const project = await db.project.create({
     data: {
@@ -241,6 +406,9 @@ export async function createProject(
     });
   }
 
+  const snapshotRows = await db.character.findMany({ where: { projectId: project.id } });
+  await ensureChapterCharacterSnapshot(project.id, initialWorld, snapshotRows.map(rowToCharacter), { overwrite: true });
+
   return project.id;
 }
 
@@ -248,9 +416,47 @@ export async function createProject(
  * 列出所有项目
  */
 export async function listProjects() {
-  return db.project.findMany({
+  const projects = await db.project.findMany({
     orderBy: { updatedAt: 'desc' },
-    include: { _count: { select: { characters: true, events: true, chapters: true } } },
+    include: {
+      _count: { select: { characters: true, events: true, chapters: true } },
+    },
+  });
+
+  const chapterCounts = await db.$queryRawUnsafe<Array<{
+    projectId: string;
+    effectiveChapters: number | bigint | null;
+    chapterDrafts: number | bigint | null;
+  }>>(
+    `SELECT "projectId",
+            COUNT(DISTINCT COALESCE("chapterNo", 0)) AS "effectiveChapters",
+            COUNT(*) AS "chapterDrafts"
+       FROM "Chapter"
+      GROUP BY "projectId"`
+  );
+  const chapterCountMap = new Map(
+    chapterCounts.map((item) => [
+      item.projectId,
+      {
+        effectiveChapters: Number(item.effectiveChapters ?? 0),
+        chapterDrafts: Number(item.chapterDrafts ?? 0),
+      },
+    ])
+  );
+
+  return projects.map(({ _count, ...project }) => {
+    const chapterStats = chapterCountMap.get(project.id);
+    const effectiveChapterCount = chapterStats?.effectiveChapters ?? _count.chapters;
+    const chapterDraftCount = chapterStats?.chapterDrafts ?? _count.chapters;
+    return {
+      ...project,
+      _count: {
+        ..._count,
+        chapters: effectiveChapterCount || chapterDraftCount,
+        chapterDrafts: chapterDraftCount,
+        staleChapterDrafts: Math.max(0, chapterDraftCount - (effectiveChapterCount || 0)),
+      },
+    };
   });
 }
 

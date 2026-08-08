@@ -5,9 +5,15 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 export const db =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: ['query'],
-  })
+  globalForPrisma.prisma && (globalForPrisma.prisma as any).characterChapterSnapshot
+    ? globalForPrisma.prisma
+    : globalForPrisma.prisma && !(globalForPrisma.prisma as any).characterChapterSnapshot
+      ? new PrismaClient({
+          log: ['query'],
+        })
+      :
+        new PrismaClient({
+          log: ['query'],
+        })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db

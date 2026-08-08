@@ -3,7 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000 2>&1 | tee dev.log",
+    "dev": "node scripts/dev-with-engine.mjs",
+    "dev:next": "next dev -H 0.0.0.0 -p 3000 2>&1 | tee dev.log",
+    "dev:engine": "bun mini-services/novel-engine/index.ts 2>&1 | tee novel-engine.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
@@ -71,6 +73,7 @@
     "react-syntax-highlighter": "^15.6.1",
     "recharts": "^2.15.4",
     "sharp": "^0.34.3",
+    "socket.io": "^4.7.0",
     "socket.io-client": "^4.8.3",
     "sonner": "^2.0.6",
     "tailwind-merge": "^3.3.1",

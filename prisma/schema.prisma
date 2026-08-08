@@ -15,17 +15,20 @@ model Project {
   id          String   @id @default(cuid())
   name        String
   template    String   @default("online-game") // 风格模板 key
-  worldState  String   @default("{}")           // JSON: 当前 World State 快照
-  directorLvl Int      @default(3)              // Director 主导强度 1-5
-  status      String   @default("setup")        // setup | running | paused | ended
+  worldState  String   @default("{}") // JSON: 当前 World State 快照
+  directorLvl Int      @default(3) // Director 主导强度 1-5
+  status      String   @default("setup") // setup | running | paused | ended
   currentTurn Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  characters Character[]
-  events     Event[]
-  chapters   Chapter[]
-  directives Directive[]
+  characters                Character[]
+  events                    Event[]
+  chapters                  Chapter[]
+  directives                Directive[]
+  readerReviews             ReaderReview[]
+  characterChapterSnapshots CharacterChapterSnapshot[]
+  roundtableEntries         RoundtableEntry[]
 }
 
 // 角色 Agent
@@ -34,36 +37,57 @@ model Character {
   projectId    String
   name         String
   role         String   @default("npc") // protagonist | antagonist | npc
-  persona      String   @default("{}")  // JSON: 性格、背景、目标、立场
-  currentState String   @default("{}")  // JSON: 情绪、位置、与其他角色关系、属性
+  persona      String   @default("{}") // JSON: 性格、背景、目标、立场
+  currentState String   @default("{}") // JSON: 情绪、位置、与其他角色关系、属性
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  events   Event[]  @relation("CharacterEvents")
-  proposed Event[]  @relation("CharacterProposed")
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events   Event[] @relation("CharacterEvents")
+  proposed Event[] @relation("CharacterProposed")
 
   @@index([projectId])
 }
 
+// 每章起点的人物快照：用于重置章节时恢复角色档案/状态，避免未来状态污染回退章节
+model CharacterChapterSnapshot {
+  id           String   @id @default(cuid())
+  projectId    String
+  chapterNo    Int
+  characterId  String
+  name         String
+  role         String
+  persona      String   @default("{}")
+  currentState String   @default("{}")
+  isPresent    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, chapterNo, characterId])
+  @@index([projectId, chapterNo])
+  @@index([projectId, characterId])
+}
+
 // 事件日志：不可变，只能追加
 model Event {
-  id         String   @id @default(cuid())
-  projectId  String
-  turn       Int
-  agentId    String?  // 提案角色 ID（director 事件可为 null）
-  agentName  String   // 冗余：角色名，便于查询展示
-  type       String   // action | dialogue | state_change | scene_meta | director
-  content    String
-  target     String?  // 作用对象
-  emotion    String?  // 情绪标签
-  context    String?  // 前序事件 ID（可多个，逗号分隔）
-  status     String   @default("confirmed") // proposed | confirmed | rejected
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  projectId String
+  turn      Int
+  agentId   String? // 提案角色 ID（director 事件可为 null）
+  agentName String // 冗余：角色名，便于查询展示
+  type      String // action | dialogue | state_change | scene_meta | director
+  content   String
+  target    String? // 作用对象
+  emotion   String? // 情绪标签
+  context   String? // 前序事件 ID（可多个，逗号分隔）
+  status    String   @default("confirmed") // proposed | confirmed | rejected
+  createdAt DateTime @default(now())
 
-  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  character  Character? @relation("CharacterEvents", fields: [agentId], references: [id], onDelete: SetNull)
-  proposer   Character? @relation("CharacterProposed", fields: [agentId], references: [id], onDelete: SetNull)
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  character Character? @relation("CharacterEvents", fields: [agentId], references: [id], onDelete: SetNull)
+  proposer  Character? @relation("CharacterProposed", fields: [agentId], references: [id], onDelete: SetNull)
 
   @@index([projectId, turn])
   @@index([projectId, status])
@@ -71,31 +95,72 @@ model Event {
 
 // 章节：Writer 输出
 model Chapter {
-  id         String   @id @default(cuid())
-  projectId  String
-  sceneName  String
-  content    String   @default("")
-  wordCount  Int      @default(0)
-  startTurn  Int
-  endTurn    Int
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id           String   @id @default(cuid())
+  projectId    String
+  chapterNo    Int?
+  chapterTitle String?
+  sceneName    String
+  content      String   @default("")
+  wordCount    Int      @default(0)
+  startTurn    Int
+  endTurn      Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  readerReviews ReaderReview[]
 
   @@index([projectId])
+  @@index([projectId, chapterNo])
+}
+
+// 读者评审：Writer 输出后的犀利反馈，不直接改正文
+model ReaderReview {
+  id               String   @id @default(cuid())
+  projectId        String
+  chapterId        String
+  readerId         String
+  readerName       String
+  focus            String
+  severity         Int      @default(3) // 1=轻微提醒，5=必须回炉
+  summary          String   @default("")
+  praise           String   @default("")
+  problems         String   @default("[]") // JSON string[]
+  suggestions      String   @default("[]") // JSON string[]
+  exposedQuestions String   @default("[]") // JSON string[]
+  createdAt        DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([chapterId])
 }
 
 // 用户给 Director 的指令
 model Directive {
-  id         String   @id @default(cuid())
-  projectId  String
-  type       String   // command | world_state_edit | text_rewrite
-  content    String   // 指令文本或 JSON
-  status     String   @default("pending") // pending | applied | rejected
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  projectId String
+  chapterNo Int? // 指令所属章节；旧数据为空时不自动注入任何新章节
+  type      String // command | world_state_edit | text_rewrite
+  content   String // 指令文本或 JSON
+  status    String   @default("pending") // pending | applied | rejected
+  createdAt DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  @@index([projectId, status])
+  @@index([projectId, chapterNo, status])
+}
+
+// 设计讨论记录：跨页面同步，由剧情设计师、Director、设定审核共同产出
+model RoundtableEntry {
+  id        String   @id
+  projectId String
+  topic     String
+  payload   String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
 }

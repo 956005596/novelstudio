@@ -1,14 +1,15 @@
 /**
  * Outline Parser Agent (v2 — 多步流水线)
  *
- * 把用户输入的大纲解析为丰满的演绎世界，支持 200w 字长篇。
+ * 把用户输入的大纲解析为丰满的演绎世界，支持 100w+ 字长篇。
  *
  * 流水线（每步独立 LLM 调用，避免单次输出截断）：
- *   1. compressOutline   — 超长大纲先压缩
+ *   1. readOutline       — 完整读取用户大纲，不做有损压缩或截断
  *   2. buildWorldLore    — 构建世界观设定（背景/势力/地理/规则/主题）
  *   3. buildCharacters   — 设计角色深度档案（背景/成长弧线/内在冲突/秘密）
  *   4. buildPlotNodes    — 拆解剧情节点
- *   5. assembleWorldState — 组装初始 World State
+ *   5. buildLongFormPlan — 根据用户大纲生成长篇卷结构
+ *   6. assembleWorldState — 组装初始 World State
  *
  * 每步通过 onProgress 回调上报进度，前端实时显示。
  */
@@ -18,21 +19,32 @@ import type {
   Character,
   CharacterPersona,
   CharacterState,
+  LongFormPlan,
   PlotNode,
   WorldLore,
   WorldState,
 } from '../types';
+import {
+  LONG_FORM_MIN_WORDS,
+  LONG_FORM_TARGET_CHAPTERS,
+  LONG_FORM_TARGET_WORDS,
+  buildEmptyLongFormPlan,
+  normalizeLongFormPlan,
+} from '../long-form-plan';
+import {
+  CHAPTER_WORD_TARGET_MAX,
+  CHAPTER_WORD_TARGET_MIN,
+} from '../chapter-policy';
+import { expRequiredForNextLevel } from '../progression';
 
-// 长大纲阈值
-const LONG_OUTLINE_THRESHOLD = 3000;
-const COMPRESSED_TARGET = 1500;
 const PARSE_MAX_TOKENS = 8000;
 
 export type ProgressStage =
-  | 'compressing'     // 压缩超长大纲
+  | 'reading-outline' // 完整读取用户大纲
   | 'world-lore'      // 构建世界观
   | 'characters'      // 设计角色
   | 'plot-nodes'      // 拆解剧情节点
+  | 'long-form-plan'  // 生成长篇卷结构
   | 'assembling'      // 组装 World State
   | 'done'
   | 'error';
@@ -56,53 +68,6 @@ export interface ParsedOutline {
 export type ProgressCallback = (event: ProgressEvent) => void;
 
 // ============================================================
-// 阶段 1：压缩超长大纲
-// ============================================================
-async function compressOutline(
-  longOutline: string,
-  onProgress: ProgressCallback
-): Promise<string> {
-  onProgress({
-    stage: 'compressing',
-    message: `大纲超长（${longOutline.length} 字），正在压缩为结构化摘要…`,
-    progress: 5,
-  });
-
-  const sysPrompt = `你是 NovelStudio 的大纲压缩器。用户输入了一份超长小说大纲（${longOutline.length} 字），请把它压缩为 ${COMPRESSED_TARGET} 字左右的结构化摘要。
-
-# 压缩原则
-1. **保留**：所有角色名、核心剧情节点、关键转折、人物关系、矛盾冲突、世界观要素
-2. **去掉**：环境描写的细节、心理活动、对话原文、场景氛围
-3. **结构化**：按"背景-角色-剧情节点"组织
-4. **不丢信息**：压缩后 AI 还能基于此生成完整 World State
-
-# 输出格式
-\`\`\`
-背景：一句话概括故事背景
-
-角色：
-- 角色名（身份）：核心目标 / 与他人关系
-- ...
-
-剧情节点：
-1. 节点1（开局）：描述
-2. 节点2（转折）：描述
-...
-\`\`\`
-
-只输出压缩后的大纲，不要任何说明文字。`;
-
-  const messages: ChatMessage[] = [
-    { role: 'system', content: sysPrompt },
-    { role: 'user', content: longOutline },
-  ];
-
-  const compressed = await chat(messages, { temperature: 0.3, maxTokens: 2500 });
-  console.log(`[OutlineParser] 长大纲压缩：${longOutline.length} → ${compressed.length} 字`);
-  return compressed.trim();
-}
-
-// ============================================================
 // 阶段 2：构建世界观设定
 // ============================================================
 async function buildWorldLore(
@@ -118,7 +83,7 @@ async function buildWorldLore(
   const sysPrompt = `你是 NovelStudio 的世界观架构师，负责为长篇小说构建丰满的世界观设定。
 
 # 任务
-基于用户大纲，生成详细的世界观档案。这是 200w 字长篇的背景支撑，要够丰满。
+基于用户大纲，生成详细的世界观档案。这是 100w+ 字长篇的背景支撑，要够丰满。
 
 # 输出格式（严格 JSON）
 \`\`\`json
@@ -153,6 +118,7 @@ async function buildWorldLore(
 - factions 至少 2 个，让故事有势力博弈空间
 - geography 至少 3 个地点，支持后续场景切换
 - rules 要明确，让角色行为有边界
+- initialScene 必须是小说时间线上最早的实际开场，不是故事简介里最刺激的事件；若第 1 章发生在觉醒、灾变、穿越、案件或关系转折之前，开场必须停在转折之前，只允许埋征兆
 - 确保 JSON 完整闭合`;
 
   const messages: ChatMessage[] = [
@@ -184,6 +150,7 @@ async function buildWorldLore(
 async function buildCharacters(
   outline: string,
   worldLore: WorldLore,
+  initialScene: { sceneName: string; sceneDescription: string; location: string; timeOfDay: string },
   templateKey: string,
   onProgress: ProgressCallback
 ): Promise<Omit<Character, 'id'>[]> {
@@ -193,7 +160,7 @@ async function buildCharacters(
     progress: 55,
   });
 
-  const sysPrompt = buildCharacterPrompt(worldLore, templateKey);
+  const sysPrompt = buildCharacterPrompt(worldLore, initialScene, templateKey);
   const messages: ChatMessage[] = [
     { role: 'system', content: sysPrompt },
     { role: 'user', content: `# 用户大纲\n"""\n${outline}\n"""` },
@@ -216,8 +183,8 @@ async function buildCharacters(
       });
 
       // 第二次起用精简 prompt
-      const useMessages = attempts === 1 ? messages : [
-        { role: 'system', content: buildCharacterPrompt(worldLore, templateKey, true) },
+      const useMessages: ChatMessage[] = attempts === 1 ? messages : [
+        { role: 'system', content: buildCharacterPrompt(worldLore, initialScene, templateKey, true) },
         { role: 'user', content: `# 用户大纲\n"""\n${outline}\n"""` },
       ];
 
@@ -244,6 +211,7 @@ async function buildCharacters(
     name: c.name ?? '未命名角色',
     role: c.role ?? 'npc',
     persona: {
+      gender: c.persona?.gender ?? c.persona?.性别 ?? '',
       background: c.persona?.background ?? '',
       backstory: c.persona?.backstory ?? '',
       personality: c.persona?.personality ?? [],
@@ -257,8 +225,14 @@ async function buildCharacters(
       motivations: c.persona?.motivations ?? [],
       appearance: c.persona?.appearance ?? '',
       attributes: c.persona?.attributes,
-      skills: c.persona?.skills,
-      equipment: c.persona?.equipment,
+      skills: c.persona?.skills ?? [],
+      equipment: c.persona?.equipment ?? [],
+      talents: c.persona?.talents ?? [],
+      mounts: c.persona?.mounts ?? [],
+      pets: c.persona?.pets ?? [],
+      inventory: c.persona?.inventory ?? [],
+      titles: c.persona?.titles ?? [],
+      profession: c.persona?.profession,
     } as CharacterPersona,
     currentState: {
       emotion: c.currentState?.emotion ?? '平静',
@@ -267,6 +241,8 @@ async function buildCharacters(
       hp: c.currentState?.hp,
       mp: c.currentState?.mp,
       level: c.currentState?.level,
+      exp: c.currentState?.exp ?? 0,
+      nextLevelExp: c.currentState?.nextLevelExp ?? expRequiredForNextLevel(c.currentState?.level),
       buffs: c.currentState?.buffs ?? [],
     } as CharacterState,
   }));
@@ -295,9 +271,20 @@ async function buildCharacters(
   return characters;
 }
 
-function buildCharacterPrompt(worldLore: WorldLore, templateKey: string, simplified = false): string {
+function buildCharacterPrompt(
+  worldLore: WorldLore,
+  initialScene: { sceneName: string; sceneDescription: string; location: string; timeOfDay: string },
+  templateKey: string,
+  simplified = false
+): string {
   const loreContext = `# 世界观背景（角色要与此契合）
-${worldLore.worldBackground}`;
+${worldLore.worldBackground}
+
+# 小说实际开场（所有 currentState 和当前持有物必须停在这个时刻）
+${initialScene.sceneName}｜${initialScene.location}｜${initialScene.timeOfDay}
+${initialScene.sceneDescription}
+
+世界观档案和长线大纲可以写未来，但人物的 currentState、goals、skills、equipment、talents、inventory、relationships 只能写这个开场时刻已经发生、已经拥有、已经认识的内容。`;
 
   if (simplified) {
     // 精简版：减少字段要求，确保输出完整
@@ -313,24 +300,25 @@ ${loreContext}
       "name": "角色名",
       "role": "protagonist" | "antagonist" | "npc",
       "persona": {
-        "background": "一句话背景",
-        "backstory": "背景故事（100-150 字）",
+        "background": "当前已知身份/处境，不写未来觉醒、神器、终局身份",
+        "gender": "男/女/其他/未知，用户大纲明确时必须照抄",
+        "backstory": "作者侧背景备注（100-150 字，不给角色当已知事实）",
         "personality": ["性格1", "性格2"],
-        "goals": ["目标1"],
-        "stance": "立场",
+        "goals": ["当前可感知、可执行的目标"],
+        "stance": "当前阶段立场，不写未来阵营",
         "speechStyle": "说话风格",
-        "growthArc": "成长弧线（50 字）",
-        "innerConflict": "内在冲突",
-        "secrets": ["秘密1"],
+        "growthArc": "作者侧长线成长备注（50 字，不等于已发生）",
+        "innerConflict": "当前已显露的内在冲突；没有就留空",
+        "secrets": ["作者侧伏笔；若当前未揭露可留空"],
         "motivations": ["表层", "深层"],
-        ${templateKey === 'online-game' ? '"attributes": {"力量": 20},\n        "skills": ["技能1"],\n        "equipment": ["装备1"],' : ''}
+        ${templateKey === 'online-game' ? '"attributes": {"力量": 20},\n        "skills": [],\n        "equipment": [],\n        "talents": [],\n        "inventory": [],' : ''}
         "appearance": "外貌"
       },
       "currentState": {
         "emotion": "情绪",
         "location": "位置",
-        "relationships": {"另一角色": {"value": 30, "note": "关系"}},
-        ${templateKey === 'online-game' ? '"hp": 100, "mp": 50, "level": 1,' : ''}
+        "relationships": {"另一角色": {"value": 10, "note": "同学/同校/初识；不要预设战友或队友"}},
+        ${templateKey === 'online-game' ? '"hp": 100, "mp": 50, "level": 1, "exp": 0, "nextLevelExp": 100,' : ''}
         "buffs": []
       }
     }
@@ -348,7 +336,7 @@ ${loreContext}
 
 # 当前风格模板：${templateKey}
 ${templateKey === 'online-game'
-    ? '网游模板：必须有 attributes/skills/equipment，技能名用「」括起，等级/装备/属性要具体'
+    ? '网游模板：必须有 attributes。skills/equipment/talents/inventory 只写开局已经真实拥有且可使用的内容；后续觉醒、王器、转职、专属技能、打怪掉落不要预先写进角色卡，必须留给演绎过程动态获得。'
     : '通用模板：可省略 attributes/skills/equipment'}
 
 ${loreContext}
@@ -361,31 +349,36 @@ ${loreContext}
       "name": "角色名",
       "role": "protagonist" | "antagonist" | "npc",
       "persona": {
-        "background": "一句话背景",
-        "backstory": "详细背景故事（200-300 字，包括身世/关键经历/转折点）",
+        "background": "当前已知身份/处境（一句话）。不要写未来觉醒、未来能力、核心道具、幕后真相、终局身份或最终关系等未发生内容",
+        "gender": "男/女/其他/未知，用户大纲明确时必须照抄",
+        "backstory": "作者侧背景备注（200-300 字，包括身世/关键经历；不等于角色当前已知事实）",
         "personality": ["性格1", "性格2", "性格3"],
-        "goals": ["短期目标1", "长期目标2"],
-        "stance": "立场和价值观（一句话）",
+        "goals": ["当前章节可感知、可执行的短期目标", "近期目标；不要写终局目标"],
+        "stance": "当前阶段立场和价值观（一句话），不要写未来阵营或终局对立",
         "speechStyle": "说话风格（一句话）",
         "speechHabits": ["口头禅1"],
-        "growthArc": "成长弧线：从X→到Y，经历什么转变（80-150 字）",
-        "innerConflict": "内在冲突/矛盾（一句话）",
-        "secrets": ["角色秘密1"],
+        "growthArc": "作者侧长线成长备注：从X到Y，经历什么转变（80-150 字；不驱动当前演员）",
+        "innerConflict": "当前已显露或可合理推断的内在冲突；没有就留空",
+        "secrets": ["作者侧伏笔；若当前未揭露可留空，不要让角色知道"],
         "motivations": ["表层动机", "深层动机"],
         "appearance": "外貌特征（50 字内）",
         "attributes": {"力量": 20, "敏捷": 15},
-        "skills": ["「技能1」", "「技能2」"],
-        "equipment": ["装备1", "装备2"]
+        "skills": ["开局已掌握且现在能使用的技能；没有就留空"],
+        "equipment": ["开局真实持有的装备；没有就留空"],
+        "talents": ["开局已经公开或被本人确认的天赋；未知就留空"],
+        "inventory": ["当前随身物；没有就留空"]
       },
       "currentState": {
         "emotion": "初始情绪",
         "location": "初始位置",
         "relationships": {
-          "另一角色名": {"value": 30, "note": "关系说明（含历史渊源）"}
+          "另一角色名": {"value": 10, "note": "同学/同校/初识/不熟；只有大纲明确才写旧识，不要预设战友或队友"}
         },
         "hp": 100,
         "mp": 50,
         "level": 1,
+        "exp": 0,
+        "nextLevelExp": 100,
         "buffs": []
       }
     }
@@ -394,12 +387,13 @@ ${loreContext}
 \`\`\`
 
 # 设计原则
-1. **冲突优先**：角色之间必须有张力，至少一个角色有"表面立场"和"真实立场"的差距
-2. **深度**：backstory 要够丰满，让角色有"为什么是这样的人"的合理性
-3. **成长空间**：growthArc 要明确，让角色在 200w 字里有变化
-4. **秘密**：每个角色至少 1 个秘密，可作为后续剧情伏笔
-5. **关系网**：relationships 必须互相填写，note 要含历史渊源
+1. **当前档案优先**：background/goals/stance 是演员当前会读取的行动依据，只能放开局已知事实，不放未来剧情。
+2. **冲突优先**：角色之间可以有性格、利益、阶层或信息差张力，但第一章不要预设已经成队。
+3. **深度**：backstory/growthArc/secrets 是作者侧备注，用于长篇追踪，不代表角色当前知道或已经发生。
+4. **成长空间**：growthArc 要明确，让角色在 100w+ 字里有变化，但不要把结局直接写成当前目标。
+5. **关系网**：relationships 必须符合开局事实；同班/同校通常 -5 到 +20，互救后才逐步升高，不能一开始就是战友/队友。
 6. **不扁平**：反派也要有合理动机，不要纯粹恶
+7. **不预设掉落**：不要提前列出未来技能、未来装备、未来天赋、未来坐骑、未来称号；这些必须通过后续演绎事件动态写入。
 
 只输出 JSON，不要说明文字。确保 JSON 完整闭合。`;
 }
@@ -423,10 +417,10 @@ async function buildPlotNodes(
   const factionsCount = worldLore.factions?.length ?? 0;
   const geographyCount = worldLore.geography?.length ?? 0;
 
-  const sysPrompt = `你是 NovelStudio 的剧情架构师，负责为 200w 字长篇小说构建网状剧情结构。
+  const sysPrompt = `你是 NovelStudio 的剧情架构师，负责为 100w+ 字长篇小说构建网状剧情结构。
 
 # 任务
-基于大纲、世界观和角色，生成 **15-25 个剧情节点**，形成网状叙事结构，支撑长篇连载。
+基于大纲、世界观和角色，生成 **48-72 个阶段剧情节点**，形成网状叙事结构，支撑 100w+ 长篇连载。每个节点不是一章，而是可支撑 3-8 章的阶段任务。
 
 # 角色
 ${charNames}
@@ -437,17 +431,18 @@ ${charNames}
 - 主题：${worldLore.themes?.join('、') ?? '未明确'}
 
 # 节点类型（必须混搭，不能全是主线）
-1. **main（主线）**：5-8 个，必经剧情，priority 5，estimatedTurns 8-15
-2. **sub（支线）**：5-8 个，角色个人线/势力博弈/世界事件，priority 3-4，estimatedTurns 4-8
-3. **foreshadow（伏笔）**：3-5 个，埋线索/暗示/悬念，priority 2-3，estimatedTurns 2-4
-4. **daily（日常缓冲）**：2-4 个，关系戏/休息/世界观展示，priority 1，estimatedTurns 2-4
+1. **main（主线）**：12-18 个，必经剧情，priority 5，estimatedTurns 8-15
+2. **sub（支线）**：18-28 个，角色个人线/势力博弈/世界事件，priority 3-4，estimatedTurns 4-8
+3. **foreshadow（伏笔）**：10-16 个，埋线索/暗示/悬念，priority 2-3，estimatedTurns 2-4
+4. **daily（日常缓冲）**：8-12 个，关系戏/休息/世界观展示，priority 1，estimatedTurns 2-4
 
-# 节奏原则（200w 字长篇）
+# 节奏原则（100w+ 字长篇）
 - **慢热**：前 5 个 Turn 不要推进主线，先日常+伏笔铺垫
 - **起伏**：高潮段（main 高 tension）后必接缓冲段（daily 低 tension）
 - **交织**：主线:支线 ≈ 1:2，每个主线节点前后穿插支线
 - **悬念**：每 3-5 个节点埋一个伏笔，后续节点回收
 - **角色线**：每个主要角色至少 1 条个人支线
+- **大纲来源**：节点标题和描述必须来自用户大纲、世界观和角色关系；信息不足时写功能性标题，不得凭空补终局设定
 
 # 输出格式（严格 JSON）
 \`\`\`json
@@ -523,12 +518,106 @@ ${charNames}
 /** 降级节点生成（当 LLM 失败时） */
 function buildFallbackPlotNodes(): PlotNode[] {
   return [
-    { index: 1, title: '日常开场', description: '角色日常互动，展示世界观', nodeType: 'daily', priority: 1, estimatedTurns: 3, targetTurn: 1, tensionLevel: 2, completed: false },
-    { index: 2, title: '伏笔埋设', description: '埋下关键线索', nodeType: 'foreshadow', priority: 2, estimatedTurns: 2, targetTurn: 4, tensionLevel: 3, completed: false },
-    { index: 3, title: '主线启动', description: '主线剧情开启', nodeType: 'main', priority: 5, estimatedTurns: 10, targetTurn: 7, tensionLevel: 6, completed: false },
-    { index: 4, title: '支线展开', description: '角色个人线', nodeType: 'sub', priority: 3, estimatedTurns: 5, targetTurn: 12, tensionLevel: 5, completed: false },
-    { index: 5, title: '主线推进', description: '主线第一次转折', nodeType: 'main', priority: 5, estimatedTurns: 8, targetTurn: 18, tensionLevel: 7, completed: false },
+    { index: 1, title: '日常基线', description: '建立旧秩序、主角处境和核心关系，让读者知道灾变前的常态。', nodeType: 'daily', priority: 1, estimatedTurns: 3, targetTurn: 1, tensionLevel: 2, completed: false },
+    { index: 2, title: '异常压近', description: '用环境、舆论或小范围异常埋下变化前兆，但不直接解释完整体系。', nodeType: 'foreshadow', priority: 2, estimatedTurns: 3, targetTurn: 4, tensionLevel: 3, completed: false },
+    { index: 3, title: '主线启动', description: '第一场不可逆事件打破常态，角色被迫做出当前能力范围内的选择。', nodeType: 'main', priority: 5, estimatedTurns: 10, targetTurn: 8, tensionLevel: 6, completed: false },
+    { index: 4, title: '关系成队', description: '通过危机后的分歧、互救或利益交换，让核心人物形成初始关系网。', nodeType: 'sub', priority: 3, estimatedTurns: 6, targetTurn: 18, tensionLevel: 5, completed: false },
+    { index: 5, title: '规则初显', description: '展示世界规则的一角，并让角色因信息差付出代价或获得阶段性认知。', nodeType: 'foreshadow', priority: 3, estimatedTurns: 4, targetTurn: 26, tensionLevel: 4, completed: false },
+    { index: 6, title: '初始危机', description: '让第一阶段矛盾集中爆发，解决局部问题，同时留下更大范围的问题。', nodeType: 'main', priority: 5, estimatedTurns: 12, targetTurn: 34, tensionLevel: 7, completed: false },
+    { index: 7, title: '区域扩展', description: '把视野从初始场景扩展到更大的区域、势力或资源竞争。', nodeType: 'sub', priority: 4, estimatedTurns: 8, targetTurn: 48, tensionLevel: 6, completed: false },
+    { index: 8, title: '阶段收束', description: '完成第一阶段目标，回收部分小伏笔，同时保留长线谜团。', nodeType: 'main', priority: 5, estimatedTurns: 10, targetTurn: 60, tensionLevel: 8, completed: false },
   ];
+}
+
+// ============================================================
+// 阶段 5：根据用户大纲生成长篇卷结构
+// ============================================================
+async function buildLongFormPlan(
+  outline: string,
+  worldLore: WorldLore,
+  characters: Omit<Character, 'id'>[],
+  plotNodes: PlotNode[],
+  onProgress: ProgressCallback
+): Promise<LongFormPlan> {
+  onProgress({
+    stage: 'long-form-plan',
+    message: '正在根据用户大纲生成 100w+ 长篇规划：卷结构、容量、阶段目标…',
+    progress: 96,
+  });
+
+  const charNames = characters.map((c) => c.name).join('、') || '未明确';
+  const nodeBrief = plotNodes
+    .slice(0, 72)
+    .map((node) => `${node.index}. ${node.title}（${node.nodeType ?? 'main'}）：${node.description}`)
+    .join('\n');
+
+  const sysPrompt = `你是 NovelStudio 的“长篇总纲规划 Agent”。
+
+# 任务
+根据用户大纲、世界观、角色和剧情节点，生成 100w+ 字长篇规划。你是执行层，不是开发者；卷名、卷目标和剧情阶段必须从用户输入中判断，不能使用开发者预设剧情。
+
+# 硬约束
+- 目标体量：至少 ${Math.round(LONG_FORM_MIN_WORDS / 10000)} 万字，建议 ${Math.round(LONG_FORM_TARGET_WORDS / 10000)} 万字以上
+- 目标章节：约 350-450 章，默认 ${LONG_FORM_TARGET_CHAPTERS} 章
+- 单章正文：${CHAPTER_WORD_TARGET_MIN}-${CHAPTER_WORD_TARGET_MAX} 字
+- 规划 8-12 卷，每卷 30-60 章
+- plotNodes 是阶段骨架，不是一章一个节点
+- 卷名、卷目标、阶段承诺必须来自用户大纲/世界观/角色关系
+- 如果大纲信息不足，卷名使用功能性标题，如“第一阶段：开局危机”，purpose 写明“待用户补充”，不得凭空发明终局、大反派、神话体系或道具
+
+# 输出 JSON，不要 markdown
+{
+  "targetWords": 1000000,
+  "minWords": 1000000,
+  "targetChapters": 400,
+  "chapterWordMin": ${CHAPTER_WORD_TARGET_MIN},
+  "chapterWordMax": ${CHAPTER_WORD_TARGET_MAX},
+  "volumes": [
+    {
+      "index": 1,
+      "title": "卷名或功能性阶段名",
+      "purpose": "本卷阶段目标、主要矛盾、要保留的长线悬念",
+      "chapterStart": 1,
+      "chapterEnd": 45,
+      "nodeIndexes": [1, 2, 3],
+      "status": "active"
+    }
+  ],
+  "promise": "这本书如何支撑 100w+ 字，而不是十章收束",
+  "pacingPrinciples": ["节奏原则1", "节奏原则2"]
+}`;
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: sysPrompt },
+    {
+      role: 'user',
+      content: `# 用户大纲\n"""\n${outline}\n"""\n\n# 世界观\n${worldLore.worldBackground}\n\n# 主要角色\n${charNames}\n\n# 剧情阶段节点\n${nodeBrief}`,
+    },
+  ];
+
+  try {
+    const raw = await chat(messages, { temperature: 0.65, maxTokens: 5000 });
+    const parsed = extractJSON<Partial<LongFormPlan>>(raw);
+    const plan = normalizeLongFormPlan(parsed);
+
+    onProgress({
+      stage: 'long-form-plan',
+      message: plan.volumes.length
+        ? `长篇规划完成：${plan.volumes.length} 卷 / 约 ${plan.targetChapters} 章`
+        : '长篇规划未产出卷结构，已保留容量规则，等待补充大纲后再生成',
+      progress: 97,
+      detail: {
+        targetChapters: plan.targetChapters,
+        volumeCount: plan.volumes.length,
+        volumes: plan.volumes.map((v) => ({ index: v.index, title: v.title, chapterStart: v.chapterStart, chapterEnd: v.chapterEnd })),
+      },
+    });
+
+    return plan;
+  } catch (err: any) {
+    console.warn('[OutlineParser] 长篇规划生成失败，使用空规划:', err.message);
+    return buildEmptyLongFormPlan();
+  }
 }
 
 // ============================================================
@@ -547,19 +636,13 @@ export async function parseOutline(
 
   console.log(`[OutlineParser] 输入大纲 ${trimmed.length} 字`);
 
-  // 阶段 1：压缩（如需要）
-  let workOutline = trimmed;
-  if (trimmed.length > LONG_OUTLINE_THRESHOLD) {
-    try {
-      workOutline = await compressOutline(trimmed, progress);
-      if (!workOutline || workOutline.length < 50) {
-        throw new Error('压缩后大纲过短');
-      }
-    } catch (err: any) {
-      console.error('[OutlineParser] 压缩失败，降级用原文前 3000 字:', err.message);
-      workOutline = trimmed.slice(0, 3000);
-    }
-  }
+  // 阶段 1：完整读取用户大纲。这里不能压缩或截断，否则会丢失长篇规划和后续卷信息。
+  const workOutline = trimmed;
+  progress({
+    stage: 'reading-outline',
+    message: `正在读取完整大纲（${trimmed.length} 字），不会压缩或截断…`,
+    progress: 5,
+  });
 
   // 阶段 2：构建世界观
   const worldResult = await buildWorldLore(workOutline, progress);
@@ -568,6 +651,7 @@ export async function parseOutline(
   const characters = await buildCharacters(
     workOutline,
     worldResult.worldLore,
+    worldResult.initialScene,
     worldResult.templateKey,
     progress
   );
@@ -577,6 +661,14 @@ export async function parseOutline(
     workOutline,
     worldResult.worldLore,
     characters,
+    progress
+  );
+
+  const longFormPlan = await buildLongFormPlan(
+    workOutline,
+    worldResult.worldLore,
+    characters,
+    plotNodes,
     progress
   );
 
@@ -597,16 +689,17 @@ export async function parseOutline(
     tension: worldResult.initialScene.tension ?? 3,
     turn: 0,
     plotNodes,
+    longFormPlan,
     writerHint: worldResult.writerHint,
     worldLore: worldResult.worldLore,
-    pacingMode: 'slow',            // 默认慢热模式（200w 字长篇）
+    pacingMode: 'slow',            // 默认慢热模式（100w+ 字长篇）
     currentMainNodeIndex: 0,
     turnsSinceLastMain: 0,
   };
 
   progress({
     stage: 'done',
-    message: `解析完成：${characters.length} 角色 / ${plotNodes.length} 节点 / ${worldResult.worldLore.factions?.length ?? 0} 势力`,
+    message: `解析完成：${characters.length} 角色 / ${plotNodes.length} 节点 / ${longFormPlan.volumes.length} 卷规划 / ${worldResult.worldLore.factions?.length ?? 0} 势力`,
     progress: 100,
   });
 
