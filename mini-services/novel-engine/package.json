@@ -8,7 +8,6 @@
   "dependencies": {
     "socket.io": "^4.7.0",
     "@prisma/client": "^6.11.1",
-    "z-ai-web-dev-sdk": "^0.0.18",
     "uuid": "^11.1.0"
   }
 }

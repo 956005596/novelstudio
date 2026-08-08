@@ -19,9 +19,6 @@ export const metadata: Metadata = {
   description: "多 Agent 自主演绎 · Director 调度冲突 · 实时生成小说文本 · 任意时刻干预校准",
   keywords: ["NovelStudio", "AI 写作", "多 Agent", "演绎叙事", "Next.js"],
   authors: [{ name: "NovelStudio" }],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
-  },
   openGraph: {
     title: "NovelStudio",
     description: "AI 演绎叙事引擎",
