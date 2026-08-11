@@ -14,6 +14,7 @@ export const DEFAULT_AGENT_POLICY: AgentPolicy = {
   actorImmersionLevel: 4,
   actorAutonomy: 'balanced',
   actorMemoryScope: 'canon_plus_current',
+  actorTemperature: 0.9,
   directorCustomBrief: '',
   designerCustomBrief: '',
   actorCustomBrief: '',
@@ -31,6 +32,7 @@ export function normalizeAgentPolicy(policy?: Partial<AgentPolicy> | null): Agen
     actorImmersionLevel: ([1, 2, 3, 4, 5].includes(actorImmersionLevel) ? actorImmersionLevel : DEFAULT_AGENT_POLICY.actorImmersionLevel) as 1 | 2 | 3 | 4 | 5,
     actorAutonomy: normalizeChoice(policy?.actorAutonomy, ['reactive', 'balanced', 'proactive'] as const, DEFAULT_AGENT_POLICY.actorAutonomy),
     actorMemoryScope: normalizeChoice(policy?.actorMemoryScope, ['strict_current', 'canon_plus_current', 'deep_profile'] as const, DEFAULT_AGENT_POLICY.actorMemoryScope),
+    actorTemperature: normalizeTemperature(policy?.actorTemperature, DEFAULT_AGENT_POLICY.actorTemperature ?? 0.9),
     directorCustomBrief: normalizeText(policy?.directorCustomBrief),
     designerCustomBrief: normalizeText(policy?.designerCustomBrief),
     actorCustomBrief: normalizeText(policy?.actorCustomBrief),
@@ -45,6 +47,12 @@ function normalizeChoice<T extends string>(value: unknown, allowed: readonly T[]
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 1200) : '';
+}
+
+function normalizeTemperature(value: unknown, fallback: number): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(1.2, Math.max(0.4, num));
 }
 
 function directorModeLabel(value: AgentPolicy['directorMode']): string {
@@ -115,6 +123,7 @@ export function actorPolicyText(worldState: WorldState): string {
   return `# 演员把握
 你不是旁白，也不是作者的说明器，你就是角色本人。
 沉浸深度 ${policy.actorImmersionLevel}/5：越高，越要自然带出身体感受、欲望、恐惧、误判、惯性和说话节奏，而不是用解释口吻概括自己。
+	表现多样性 ${Math.round((policy.actorTemperature ?? 0.9) * 100)}/120：数值越高，你的动作和台词越要跳出千篇一律的模板反应，可以有个人化的细节、情绪波动和不按常理出牌的选择，但依然不能违背人设和已发生事实。
 记忆边界：${memoryRule}
 行动倾向：${autonomyRule}
 题材感：${policy.genreAdaptation === 'genre_aware' ? '先从项目正典里识别题材语法，再按这个世界的人会有的理解方式去反应。' : '保持通用角色演绎，不主动往固定题材套路上贴。'}

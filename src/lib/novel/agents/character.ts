@@ -21,7 +21,7 @@ import type {
 import type { WorldManager } from '../world-state';
 import type { CharacterProposal } from './director';
 import { ensureChapterFocus, resolveChapterStartTurn } from '../chapter-focus';
-import { actorPolicyText } from '../agent-policy';
+import { actorPolicyText, normalizeAgentPolicy } from '../agent-policy';
 
 const CHARACTER_PROTOCOL_ATTEMPTS = 3;
 const CHARACTER_META_TEXT = /(?:我们(?:需要|根据|现在)|根据(?:现场简报|角色要求|设定)|生成.{0,12}(?:行动|对话)|作为(?:AI|角色Agent|模型)|角色(?:需要|应该|可以)|目标是|因此[，,:：]?\s*(?:行动|回答)|输出\s*JSON|提示词|LLM|Agent|分析如下|方案如下|现在是[“\"]刚刚发生的事)/i;
@@ -374,7 +374,15 @@ ${template.narrativeTone}
 # 时序优先级
 当前章方向是本轮演绎的时间锚，优先级高于人物档案里可能提前写入的未来状态。若技能、装备、天赋、等级、位置、关系或目标明显属于当前章之后，此刻把它视为尚未获得、尚未发生，不得使用或提及。
 
-# 输出格式（严格 JSON）
+# 输出格式（严格 JSON，禁止任何创作分析）
+你现在的唯一任务：以「${character.name}」身份，对刚刚发生的现场变化，给出一个具体、贴身、第一人称的动作。
+规则（违反任何一条都会被判定为不合格）：
+1. 禁止思考过程：不得以「让我们理解…」「我需要分析…」「根据简报…」「首先…」「作为角色…」「目标是…」「因此…」等任何分析性文字开头或铺垫。
+2. 禁止复述场景、复述事件、解释设定、复盘规则、写总结或给自己下达写作指令。
+3. 直接输出单个 JSON 对象。第一个非空白字符必须是左花括号，最后一个非空白字符必须是右花括号，中间不得出现任何 JSON 之外的文字。
+4. content 字段只用一句话写你此刻真正做出的那个动作（第一人称，有对象、有动作、有可见变化），不要引用提示词里的术语，不要解释你为何这么选。
+5. 只能使用你当前状态、本章已确认装备/技能/随身物或最近事件中明确出现的物品；拿不准的物品不要用。
+
 \`\`\`json
 {
   "type": "action" | "dialogue" | "state_change",
@@ -388,7 +396,8 @@ ${template.narrativeTone}
   }
 }
 \`\`\`
-不要输出 JSON 之外的任何内容。`;
+
+现在直接写动作，不要解释。`;
 }
 
 export function buildCharacterUserPrompt(
@@ -476,8 +485,9 @@ ${directorHint ? `# 额外调度\n${directorHint}` : ''}
 给出你下一步最自然、最贴身的一步。先接住最后一个具体变化，再让现场往前动一点。
 别只给“正确答案”，给这个人会给出的答案。
 content 里要有明确对象、动作和可见变化，只回应你能感知、能理解、符合当前章边界的事情。
-输出前检查：content 必须是角色此刻真正说出或做出的内容，不能出现“根据简报、根据设定、角色需要、目标是、因此可以”等创作分析；用到的具体装备、技能和物品必须能在你的当前状态或最近事件中找到。
-请输出 JSON。`;
+输出前检查：content 必须是角色此刻真正说出或做出的内容，不能出现“根据简报、根据设定、角色需要、目标是、因此可以、让我们、首先、总结、复盘”等任何创作分析或思考过程；用到的具体装备、技能和物品必须能在你的当前状态或最近事件中找到。优先接住“刚刚发生的事”里真实出现的刺激，但也可以基于现场氛围和人设做出合理推断、试探或抢先反应——只要不把推断当成已经发生的事实写死。
+
+直接输出单个 JSON 对象：第一个字符必须是左花括号，最后一个字符必须是右花括号，不写任何 JSON 之外的文字、不做任何铺垫或解释。`;
 }
 
 export async function characterPropose(
@@ -505,6 +515,13 @@ export async function characterPropose(
 
   let previousRaw = '';
   let auditFeedback = '';
+  const actorPolicy = normalizeAgentPolicy(focusedWorld.agentPolicy);
+  // 温度优先级：角色专属 actingTemperature > 全局 actorTemperature > 默认 0.9。
+  // 不同性格的角色用不同温度：跳脱/多变的角色放高，冷静/克制的角色放低，让演绎各有特点。
+  const personaTemp = Number(character.persona.actingTemperature);
+  const baseTemperature = Number.isFinite(personaTemp)
+    ? Math.min(1.2, Math.max(0.4, personaTemp))
+    : (actorPolicy.actorTemperature ?? 0.9);
   for (let attempt = 0; attempt < CHARACTER_PROTOCOL_ATTEMPTS; attempt++) {
     const attemptMessages: ChatMessage[] = attempt === 0
       ? messages
@@ -516,7 +533,11 @@ export async function characterPropose(
             content: `上一个回答不是可执行的角色行动。${auditFeedback ? `现场审核指出：${auditFeedback}。` : ''}重新回答：只输出单个 JSON；content 只能写${character.name}此刻真正说出或做出的一个具体动作，不能解释提示词、设定、简报或创作思路，不能凭空使用档案和最近事件中不存在的物品。`,
           },
         ];
-    previousRaw = await chat(attemptMessages, { temperature: attempt === 0 ? 0.85 : 0.55, maxTokens: 3600 });
+    // 首次用配置温度给足发挥空间；重试时略降但仍保留一定多样性，避免重试变成同一句套话。
+    previousRaw = await chat(attemptMessages, {
+      temperature: attempt === 0 ? baseTemperature : Math.min(0.95, baseTemperature - 0.15),
+      maxTokens: 3600,
+    });
     const proposal = normalizeCharacterProposalDraft(
       extractJSON<CharacterProposalDraft>(previousRaw),
       character,

@@ -665,14 +665,22 @@ export function extractJSON<T = any>(raw: string): T | null {
   if (fence) {
     text = fence[1].trim();
   } else {
-    // 找第一个 { 到最后一个 }
+    // 提取第一个完整 JSON 对象：从第一个 { 开始做括号配对扫描，
+    // 遇到配对闭合就截取，避免“多个 JSON 拼接”或尾随分析文本导致整体 parse 失败。
     const first = raw.indexOf('{');
-    const last = raw.lastIndexOf('}');
-    if (first >= 0 && last > first) {
-      text = raw.slice(first, last + 1);
-    } else if (first >= 0) {
-      // 有 { 但没有 }，可能是截断
-      text = raw.slice(first);
+    if (first >= 0) {
+      const candidate = extractFirstBalancedJSON(raw, first);
+      if (candidate !== null) {
+        text = candidate;
+      } else {
+        const last = raw.lastIndexOf('}');
+        if (last > first) {
+          text = raw.slice(first, last + 1);
+        } else {
+          // 有 { 但没有 }，可能是截断
+          text = raw.slice(first);
+        }
+      }
     }
   }
 
@@ -695,6 +703,38 @@ export function extractJSON<T = any>(raw: string): T | null {
     try { return JSON.parse(looseRepaired) as T; } catch {}
   }
 
+  return null;
+}
+
+/**
+ * 从 startIndex 开始做括号配对扫描，提取第一个完整的 JSON 对象（含字符串、转义与嵌套）。
+ * 若无法配对闭合返回 null。
+ */
+function extractFirstBalancedJSON(raw: string, startIndex: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = startIndex; i < raw.length; i++) {
+    const c = raw[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (c === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return raw.slice(startIndex, i + 1);
+    }
+  }
   return null;
 }
 

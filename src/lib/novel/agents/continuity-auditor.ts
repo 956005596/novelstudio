@@ -68,7 +68,13 @@ export async function auditStoryDesignContinuity(input: {
 若当前章是第一章、最近事件为空，且导演设计严格从章节方向开始，即使旧 World State 写着后续灾变现场，也应返回 passed，不要先写分析说明。
 
 不要因为方案普通、节奏偏好不同或缺少惊喜而阻断。输出 JSON：
-{"status":"passed|blocked","issues":["硬冲突"],"repairInstruction":"给剧情设计师的一段可执行返工要求"}`,
+{"status":"passed|blocked","issues":["硬冲突"],"repairInstruction":"给剧情设计师的一段可执行返工要求"}
+
+输出纪律（违反任何一条都会判定为不合格）：
+1. 禁止思考过程、禁止复述待审核设计、禁止复述已发生事件、禁止写分析总结。
+2. 直接输出单个 JSON 对象。第一个非空白字符必须是左花括号，最后一个非空白字符必须是右花括号，中间不出现任何 JSON 之外的文字。
+3. status 只能是 "passed" 或 "blocked"；blocked 时 issues 必须写出具体冲突事实、repairInstruction 必须给出可执行修法，不得只写“硬冲突”或“不符合设定”。
+4. 不要输出第二个 JSON，不要用 \`\`\`json 代码块包裹。`,
     },
     {
       role: 'user',

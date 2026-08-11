@@ -25,7 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Play, Pause, Square, Send, ChevronLeft, ChevronRight, Activity,
   Globe, Users, FileText, MessageSquare, Zap, AlertTriangle, Info, BookOpen, BookMarked,
-  RotateCcw, Loader2, ChevronDown, Package, Sparkles, Shield, Rows2,
+  RotateCcw, Loader2, ChevronDown, Package, Sparkles, Shield, Rows2, Route,
   Settings, KeyRound, Server, PlugZap, CheckCircle2, MessagesSquare, PencilLine, X, Maximize2, Minimize2,
 } from 'lucide-react';
 import { useNovelStore, type EngineStatus, type LogEntry } from '@/store/novel-store';
@@ -600,6 +600,8 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
   const [modelConnection, setModelConnection] = useState<ModelConnectionState>('unknown');
   const [checkingModel, setCheckingModel] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'story' | 'assets' | 'characters' | 'outline' | 'discuss'>('story');
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null);
   const [rewritingChapterId, setRewritingChapterId] = useState('');
   const [selectingCanonicalId, setSelectingCanonicalId] = useState('');
@@ -1914,6 +1916,15 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
             <ThemeToggle compact />
             <Button
               size="sm"
+              variant="outline"
+              onClick={() => setSettingsOpen(true)}
+              title="总纲、素材库、角色档案、方向提案与 AI 商量"
+              className="border-primary/40 bg-primary/5 text-primary hover:bg-primary/10"
+            >
+              <Settings className="h-4 w-4 mr-1" /> 设定
+            </Button>
+            <Button
+              size="sm"
               variant={modelConfig?.configured ? 'outline' : 'secondary'}
               onClick={() => setModelDialogOpen(true)}
               title={
@@ -2352,7 +2363,266 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
         }}
       />
       <UsageGuideDialog open={guideOpen} onOpenChange={setGuideOpen} chapterWordLabel={chapterWordLabel} />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        tab={settingsTab}
+        setTab={setSettingsTab}
+        projectId={projectId}
+        storyBibleNotes={store.worldState?.storyBibleNotes ?? ''}
+        onSaveStoryBible={handleStoryBibleNotesSave}
+        roundtableTopic={roundtableTopic}
+        setRoundtableTopic={setRoundtableTopic}
+        roundtableLoading={roundtableLoading}
+        onRoundtableSubmit={handleRoundtableSubmit}
+        onOpenChapterWorkspace={() => {
+          setSettingsOpen(false);
+          switchCenterView('design');
+        }}
+        worldState={store.worldState}
+        currentChapterNo={currentChapter?.chapterNo}
+        onWorldUpdate={(worldState) => store._onWorldUpdate(worldState)}
+        onShowDesign={() => switchCenterView('design')}
+        outlineRequest={outlineRevisionRequest}
+        setOutlineRequest={setOutlineRevisionRequest}
+        outlineMode={outlineRevisionMode}
+        setOutlineMode={setOutlineRevisionMode}
+        outlineProposal={outlineRevisionProposal}
+        setOutlineProposal={setOutlineRevisionProposal}
+        outlineLoading={outlineRevisionLoading}
+        outlineApplying={outlineRevisionApplying}
+        outlineError={outlineRevisionError}
+        onOutlineGenerate={handleOutlineRevisionGenerate}
+        onOutlineApply={handleOutlineRevisionApply}
+        onClearOutline={() => setOutlineRevisionProposal(null)}
+        onSyncStoryBible={handleSyncStoryBible}
+        syncingStoryBible={storyBibleSyncing}
+      />
     </div>
+  );
+}
+
+function SettingsDialog({
+  open,
+  onOpenChange,
+  tab,
+  setTab,
+  projectId,
+  storyBibleNotes,
+  onSaveStoryBible,
+  roundtableTopic,
+  setRoundtableTopic,
+  roundtableLoading,
+  onRoundtableSubmit,
+  onOpenChapterWorkspace,
+  worldState,
+  currentChapterNo,
+  onWorldUpdate,
+  onShowDesign,
+  outlineRequest,
+  setOutlineRequest,
+  outlineMode,
+  setOutlineMode,
+  outlineProposal,
+  setOutlineProposal,
+  outlineLoading,
+  outlineApplying,
+  outlineError,
+  onOutlineGenerate,
+  onOutlineApply,
+  onClearOutline,
+  onSyncStoryBible,
+  syncingStoryBible,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  tab: 'story' | 'assets' | 'characters' | 'outline' | 'discuss';
+  setTab: (tab: 'story' | 'assets' | 'characters' | 'outline' | 'discuss') => void;
+  projectId: string;
+  storyBibleNotes: string;
+  onSaveStoryBible: (notes: string) => void;
+  roundtableTopic: string;
+  setRoundtableTopic: (topic: string) => void;
+  roundtableLoading: boolean;
+  onRoundtableSubmit: () => void;
+  onOpenChapterWorkspace: () => void;
+  worldState: WorldState | null;
+  currentChapterNo?: number;
+  onWorldUpdate: (worldState: WorldState) => void;
+  onShowDesign: () => void;
+  outlineRequest: string;
+  setOutlineRequest: (request: string) => void;
+  outlineMode: OutlineRevisionMode;
+  setOutlineMode: (mode: OutlineRevisionMode) => void;
+  outlineProposal: OutlineRevisionProposal | null;
+  setOutlineProposal: (proposal: OutlineRevisionProposal | null) => void;
+  outlineLoading: boolean;
+  outlineApplying: boolean;
+  outlineError: string;
+  onOutlineGenerate: (request: string, mode: OutlineRevisionMode, source?: OutlineRevisionSource) => void;
+  onOutlineApply: (proposal: OutlineRevisionProposal) => void;
+  onClearOutline: () => void;
+  onSyncStoryBible: () => void;
+  syncingStoryBible: boolean;
+}) {
+  const [notesDraft, setNotesDraft] = useState(storyBibleNotes ?? '');
+  const [discussDraft, setDiscussDraft] = useState('');
+
+  const tabs: Array<{ key: typeof tab; label: string; icon: React.ReactNode; desc: string }> = [
+    { key: 'story', label: '总纲', icon: <BookOpen className="h-3.5 w-3.5" />, desc: '世界观、卷规划、禁用设定、长期设定' },
+    { key: 'assets', label: '素材库', icon: <Package className="h-3.5 w-3.5" />, desc: '天赋、职业、装备、宠物、怪物、副本' },
+    { key: 'characters', label: '角色档案', icon: <Users className="h-3.5 w-3.5" />, desc: '性别、性格、天赋、关系、状态' },
+    { key: 'outline', label: '方向提案', icon: <Route className="h-3.5 w-3.5" />, desc: '改总纲、章方向、长篇规划' },
+    { key: 'discuss', label: 'AI 商量', icon: <MessagesSquare className="h-3.5 w-3.5" />, desc: '和剧情设计师 / Director / 审核讨论设定' },
+  ];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl lg:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Settings className="h-5 w-5 text-primary" /> 项目设定
+          </DialogTitle>
+          <DialogDescription>
+            设定会进入 Director、剧情设计师、设定审核和 Writer 的共同上下文；改完保存后，后续演绎与正文自动遵循。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex h-[70vh] min-h-0 flex-col gap-3">
+          <div className="grid grid-cols-2 gap-1 sm:grid-cols-3 md:grid-cols-5">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                className={`rounded-md border px-2 py-2 text-left transition-colors ${
+                  tab === t.key ? 'border-primary bg-primary/10 text-primary' : 'bg-background hover:bg-accent'
+                }`}
+              >
+                <span className="flex items-center gap-1.5 text-xs font-medium">
+                  {t.icon} {t.label}
+                </span>
+                <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{t.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border bg-background p-3">
+            {tab === 'story' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium">总纲补充（story bible）</div>
+                    <div className="text-xs text-muted-foreground">
+                      这里写你的权威设定：世界观、卷规划、人物天赋、禁用设定、后续剧情。执行者读取，系统不自行编造。
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={onShowDesign} title="关闭并回到章节工作台">
+                    关闭并继续演绎
+                  </Button>
+                </div>
+                <Textarea
+                  value={notesDraft}
+                  onChange={(e) => setNotesDraft(e.target.value)}
+                  rows={16}
+                  className="font-mono text-xs"
+                  placeholder="例：全民觉醒，唯独主角苏见山被系统公开判定为【天赋：无】；赵铁山天赋【稳持】、林照夜天赋【数据对接】…"
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      onSaveStoryBible(notesDraft);
+                    }}
+                  >
+                    保存总纲
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {notesDraft.trim() === (storyBibleNotes ?? '').trim() ? '已保存' : '有未保存修改'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {tab === 'assets' && (
+              <AssetLibraryPanel
+                projectId={projectId}
+                worldState={worldState}
+                currentChapterNo={currentChapterNo}
+                onWorldUpdate={onWorldUpdate}
+                onShowDesign={onShowDesign}
+                fullHeight={false}
+              />
+            )}
+
+            {tab === 'characters' && (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  角色档案编辑在右侧栏（角色面板）。点击角色名即可编辑性格、天赋、关系与状态。
+                </div>
+                <Button size="sm" variant="outline" onClick={onOpenChapterWorkspace}>
+                  打开章节工作台查看角色面板
+                </Button>
+              </div>
+            )}
+
+            {tab === 'outline' && (
+              <OutlineRevisionPanel
+                worldState={worldState}
+                mode={outlineMode}
+                setMode={setOutlineMode}
+                request={outlineRequest}
+                setRequest={setOutlineRequest}
+                proposal={outlineProposal}
+                loading={outlineLoading}
+                applying={outlineApplying}
+                error={outlineError}
+                onGenerate={() => onOutlineGenerate(outlineRequest, outlineMode, 'manual')}
+                onApply={onOutlineApply}
+                onClearProposal={onClearOutline}
+                onShowDesign={onShowDesign}
+                onSyncStoryBible={onSyncStoryBible}
+                syncingStoryBible={syncingStoryBible}
+                fullHeight={false}
+              />
+            )}
+
+            {tab === 'discuss' && (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  <div className="font-medium">和 AI 商量设定</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    用自然语言提出设定问题或修改要求，剧情设计师、Director 和设定审核会一起讨论并给出可采纳方案。
+                    讨论发起后会自动切到章节工作台显示讨论结果。
+                  </div>
+                </div>
+                <Textarea
+                  value={discussDraft}
+                  onChange={(e) => setDiscussDraft(e.target.value)}
+                  rows={5}
+                  placeholder="例：我改了设定——现在全班同学都有天赋，只有主角苏见山没有。请重新评估第一章的分层逻辑和后续冲突点，并给出需要同步修改的地方。"
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={roundtableLoading || !discussDraft.trim()}
+                    onClick={() => {
+                      setRoundtableTopic(discussDraft.trim());
+                      setDiscussDraft('');
+                      onOpenChapterWorkspace();
+                      setTimeout(onRoundtableSubmit, 300);
+                    }}
+                  >
+                    {roundtableLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <MessagesSquare className="h-4 w-4 mr-1" />}
+                    发起讨论
+                  </Button>
+                  {roundtableLoading && <span className="text-xs text-muted-foreground">讨论进行中，切到章节工作台查看进度…</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -4206,6 +4476,18 @@ function EventLogPanel({
   );
 }
 
+function traceEventSummary(content: string, related: string): string {
+  const text = (content ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return related || '（无内容）';
+  // 去掉常见的第一人称/动作前缀与状态描述冗余，突出“人物、物品、状态、后果”。
+  const compact = text
+    .replace(/^(我|他|她|苏见山|赵铁山|白晏|林照夜)[，,：:的]*/, '')
+    .replace(/^(顺手|反手|侧身|低头|抬头|无声地|缓缓|猛地|直接|已经|随后|接着|然后)/, '')
+    .trim();
+  if (compact.length <= 56) return compact;
+  return `${compact.slice(0, 56)}…`;
+}
+
 function formatEventCreatedAt(value: Date | string | null | undefined): string {
   if (!value) return '时间未知';
   const date = value instanceof Date ? value : new Date(value);
@@ -4259,6 +4541,8 @@ function EventTraceDocument({
             const meta = EVENT_TYPE_LABEL[event.type] ?? EVENT_TYPE_LABEL.action;
             const reason = traceReasonForEvent(event) ?? '追踪项';
             const related = [event.agentName, event.target].filter(Boolean).join(' → ');
+            const content = event.content ?? '';
+            const summary = traceEventSummary(content, related);
             return (
               <div key={event.id} className="grid gap-1.5 rounded border bg-background px-2 py-1.5 md:grid-cols-[6rem_6rem_5rem_7rem_5rem_minmax(0,1fr)] md:gap-2">
                 <span className="text-foreground">{reason}</span>
@@ -4280,7 +4564,7 @@ function EventTraceDocument({
                     {related}
                     <Badge variant="outline" className={`ml-1 text-[9px] ${meta.color}`}>{meta.label}</Badge>
                   </span>
-                  {event.content}
+                  <span title={content}>{summary}</span>
                 </span>
               </div>
             );

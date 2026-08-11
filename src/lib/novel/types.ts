@@ -182,6 +182,7 @@ export interface CharacterPersona {
   motivations?: string[];      // 动机层次（表层/深层）
   speechHabits?: string[];     // 口头禅/语言习惯
   appearance?: string;         // 外貌特征
+  actingTemperature?: number;  // 该角色专属采样温度（0.4-1.2），覆盖全局 actorTemperature；性格越跳脱越放越高，越克制越放越低
 }
 
 export interface CharacterState {
@@ -266,6 +267,7 @@ export interface AgentPolicy {
   genreAdaptation?: 'universal' | 'genre_aware'; // 是否主动读取项目题材约定并套用对应叙事语法
   actorImmersionLevel?: 1 | 2 | 3 | 4 | 5; // 演员沉浸深度，越高越像角色本人思考
   actorAutonomy?: 'reactive' | 'balanced' | 'proactive'; // 演员自发行动强度
+  actorTemperature?: number; // 角色演员采样温度，越高动作/台词越多样（0.4-1.2）
   actorMemoryScope?: 'strict_current' | 'canon_plus_current' | 'deep_profile'; // 演员可读取的人物信息边界
   directorCustomBrief?: string;       // 项目级 Director 岗位补充，不写具体剧情事实
   designerCustomBrief?: string;       // 项目级剧情设计/体系策划补充，不写具体剧情事实

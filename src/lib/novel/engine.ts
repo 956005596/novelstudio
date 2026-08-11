@@ -1478,7 +1478,7 @@ export class NovelEngine {
         previousChapterBridge?.prompt,
         events.map((event) => `T${event.turn} ${event.agentName}/${event.type}: ${event.content}`).join('\n'),
       ].filter(Boolean).join('\n\n'),
-      maxAttempts: 2,
+      maxAttempts: 4,
     });
     if (repaired.validation.issues.length > 0) {
       const message = repaired.validation.issues.map((issue) => issue.message).join('；');

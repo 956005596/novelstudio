@@ -139,7 +139,8 @@ async function repairMissingReview(
       content: `你是 NovelStudio 的单人读者评审：${persona.name}。
 ${persona.focus}。${persona.brief}
 只评审，不写正文。必须指出文本中的具体问题和可执行修法。
-只输出 JSON，不要 markdown，不要说明过程：
+只输出 JSON，不要 markdown，不要说明过程，不要复述正文，不要写分析总结。
+直接输出单个 JSON 对象：第一个非空白字符必须是左花括号，最后一个非空白字符必须是右花括号，中间不出现任何 JSON 之外的文字。
 ${reviewSchema(persona)}`,
     },
     {
@@ -156,10 +157,10 @@ ${reviewSchema(persona)}`,
       if (attempt > 1) {
         messages.push({
           role: 'user',
-          content: `上次输出无法解析或内容为空：\n${previousRaw.slice(0, 1200)}\n\n重新输出完整 JSON 对象，不要解释。`,
+          content: `上次输出无法解析或内容为空：${previousRaw.slice(0, 1200)}\n\n重新输出：直接给单个 JSON 对象（第一个字符是 {，最后一个字符是 }），包含 summary 和至少一条 problems/suggestions。不要任何分析或说明。`,
         });
       }
-      previousRaw = await chat(messages, { temperature: 0.62, maxTokens: 3200 });
+      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 4200 });
       const repaired = normalizeDraft(extractJSON<ReaderReviewDraft>(previousRaw) ?? {}, persona);
       if (isUsableDraft(repaired)) return repaired;
       lastError = new Error(`${persona.name} 补评内容为空`);
@@ -214,7 +215,13 @@ export async function runReaderReviews(
 评审人格：
 ${READER_PERSONAS.map((persona) => `- ${persona.name}：${persona.focus}。${persona.brief}`).join('\n')}
 
-只输出 JSON，不要 markdown，不要说明思考过程。reviews 必须同时包含三个 readerId：venom-style、pacing-hook、detail-auditor。
+ 只输出 JSON，不要 markdown，不要说明思考过程。reviews 必须同时包含三个 readerId：venom-style、pacing-hook、detail-auditor。
+
+输出纪律（违反任何一条都会判定为不合格）：
+1. 禁止思考过程、禁止复述正文、禁止写分析总结。
+2. 直接输出单个 JSON 对象，reviews 数组必须完整包含三个读者，缺一不可。
+3. 第一个非空白字符必须是左花括号，最后一个非空白字符必须是右花括号，中间不出现任何 JSON 之外的文字。
+4. 不要输出第二个 JSON，不要用 \`\`\`json 代码块包裹。
 {
   "reviews": [${reviewSchema(READER_PERSONAS[0])}]
 }`;
@@ -251,10 +258,13 @@ ${clipText(ctx.chapterText)}
       if (attempt > 1) {
         messages.push({
           role: 'user',
-          content: `上次输出无法解析为三人评审 JSON：\n${previousRaw.slice(0, 1600)}\n\n重新输出完整 JSON，reviews 必须同时包含三个 readerId。不要解释。`,
+          content: `上次输出没有被解析为三人评审 JSON，很可能是你先写了一段分析、或 reviews 数组不完整。
+重新回答，这次必须直接输出单个 JSON 对象：第一个非空白字符必须是左花括号，最后一个非空白字符必须是右花括号。
+reviews 数组必须同时完整包含三个 readerId：venom-style、pacing-hook、detail-auditor，且每个都要有 summary 和至少一条 problems。
+不要输出任何分析、说明、Markdown 或第二个 JSON。`,
         });
       }
-      previousRaw = await chat(messages, { temperature: 0.62, maxTokens: 5200 });
+      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 7000 });
       const parsed = extractJSON<{ reviews?: ReaderReviewDraft[] }>(previousRaw);
       if (parsed?.reviews?.length) {
         drafts = parsed.reviews;

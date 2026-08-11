@@ -11,7 +11,8 @@ export interface ChapterValidationIssue {
     | 'gender_conflict'
     | 'missing_required_character'
     | 'weak_chapter_bridge'
-    | 'missing_progression_feedback';
+    | 'missing_progression_feedback'
+    | 'design_echo';
   message: string;
   fatal?: boolean;
 }
@@ -99,11 +100,21 @@ function sentenceWindows(content: string, name: string): string[] {
 
 function hasGenderConflictWindow(window: string, name: string, gender: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // 性别称谓必须是紧贴目标角色的描述词，中间只能出现“像/是/身为/作为”等链接词或极短的非标点间隙，
+  // 禁止跨越“，。！？；、\n”等短语边界去匹配句子里其他角色（如“矮个女生”“一个男生”）的称谓。
+  const gap = '[^，。！？；、\\n]{0,6}';
+  const linker = '(是|这个|那个|作为|身为|像个|像一个|像)';
+  const maleTerms = '(男生|男孩|男同学|少年|男子|男人)';
+  const femaleTerms = '(女生|女孩|女同学|少女|女子|女人)';
+  // 方向 1：姓名在前，如“赵铁山像个女生一样”——必须带链接词，且只查与档案性别相反的称谓。
+  // 方向 2：相反称谓在前且紧贴姓名，如“女生赵铁山”——仅允许极短无标点间隙。
   if (gender.includes('女')) {
-    return new RegExp(`(${escaped}.{0,8}(是|这个|那个|作为|身为|像个|像一个)?(男生|男孩|男同学|少年|男子|男人)|(男生|男孩|男同学|少年|男子|男人).{0,8}${escaped})`).test(window);
+    return new RegExp(`${escaped}${gap}${linker}${gap}${maleTerms}`).test(window) ||
+      new RegExp(`${maleTerms}${gap}${linker}?${escaped}`).test(window);
   }
   if (gender.includes('男')) {
-    return new RegExp(`(${escaped}.{0,8}(是|这个|那个|作为|身为|像个|像一个)?(女生|女孩|女同学|少女|女子|女人)|(女生|女孩|女同学|少女|女子|女人).{0,8}${escaped})`).test(window);
+    return new RegExp(`${escaped}${gap}${linker}${gap}${femaleTerms}`).test(window) ||
+      new RegExp(`${femaleTerms}${gap}${linker}?${escaped}`).test(window);
   }
   return false;
 }
@@ -169,6 +180,18 @@ export function validateChapterContent(input: {
   const readableCount = countReadableChars(input.content);
   const issues: ChapterValidationIssue[] = [];
   const targetLabel = formatChapterWordTarget(input.targetMin, input.targetMax);
+
+  // 检测“设计复述/写作计划”混入：如果正文含有导演设计或修稿指令的结构性标题词，
+  // 说明模型把设计 JSON 或计划照抄成了正文，而不是真的写了小说正文。
+  const designEchoRe = /(最终节拍|可用事件|体系奇观|设定护栏|成长[\/、]?掉落[\/、]?职业钩子|群众压力|临时配角入口|其余需要整合的上下文|写一段|这段要|这部分|然后过渡|我来写|我需要写|上面提到|如前所述|大纲：|结构：|节拍[:：])/;
+  const echoMatch = input.content.match(designEchoRe);
+  if (echoMatch) {
+    issues.push({
+      code: 'design_echo',
+      fatal: true,
+      message: `正文疑似混入了导演设计/写作计划（“${echoMatch[0].trim().slice(0, 20)}”），而不是完整的小说正文。请只输出正式小说正文，不要复述设计字段或写作思路。`,
+    });
+  }
 
   if (input.enforceWordTarget !== false && readableCount < input.targetMin) {
     issues.push({
@@ -259,13 +282,92 @@ export function validateChapterContent(input: {
 }
 
 function cleanChapterText(raw: string): string {
-  return raw
+  let text = raw
     .replace(/^```(?:\w+)?\s*/i, '')
     .replace(/```\s*$/i, '')
     .replace(/^第[一二三四五六七八九十百\d]+章[^\n]*\n+/, '')
     .replace(/^《[^》]+》\s*\n+/, '')
-    .replace(/^(以下是|正文[:：]|小说正文[:：]|修正版[:：]).*\n+/i, '')
+    .replace(/^(以下是|正文[:：]|小说正文[:：]|修正版[:：]|用户需要我输出).*\n+/i, '')
     .trim();
+
+  // 剥离开头的写作思考/计划（修稿模型常先输出“嗯，用户要求…”“我要先…”“结构上…”再写正文）。
+  const headMetaRe = /^(?:嗯|好的|好|那么|首先|用户[要求希望让]*|我需要|我要|我先|让我|这次|本章|作为|整体|结构上|节奏上|角色|注意|最终|草稿|目标)[^。！？\n]{0,200}[。！？\n]/;
+  // 找到第一个真正像正文的段落起点：正文通常以角色动作/对话/场景描写开头。
+  // 策略：若开头若干段是计划性文字（含“章节”“正文”“字数”“结构”“节奏”“护栏”“事件日志”“演绎”“风格锚点”等元词），整体跳过。
+  const metaWordRe = /(章节|正文|字数|篇幅|可读|结构|节奏|护栏|事件日志|演绎|风格锚点|用户要求|写作|计划|框架|大纲|需要|补充|修正|衔接|铺垫|高潮|收尾|章末钩子|悬念|对话要|符合设定|核心是|护栏：)/;
+  const paragraphs = text.split(/\n\s*\n/);
+  let start = 0;
+  for (let i = 0; i < paragraphs.length && i < 8; i++) {
+    const para = paragraphs[i].replace(/\s+/g, ' ').trim();
+    if (!para) continue;
+    // 以写作计划动词开头，或整段含元词（尤其“符合设定”“护栏”“需要”“注意”“结构上”），或“第N拍/需要保持/开始写/结尾”规划段，视为计划段跳过。
+    if (
+      /^(嗯|好的|好，|用户[要求希望让]*|我需要|我要|我先|让我|这次|整体|结构上|节奏上|已经提供了|可以用|核心是|篇幅|注意|角色|先看|先写|草稿|目标|我将|让我|结尾[:：]?)/.test(para) ||
+      /^第[一二三四五六七八九十]+拍/.test(para) ||
+      /^(需要保持|开始写|结束写|第一拍|第二拍|第三拍)/.test(para) ||
+      (metaWordRe.test(para) && i <= 1)
+    ) {
+      start = i + 1;
+    } else {
+      break;
+    }
+  }
+  if (start > 0) {
+    text = paragraphs.slice(start).join('\n\n').trim();
+  }
+
+  // 剥离后首段仍可能混有元前缀（如“注意几个护栏：…；【文明接入完成。…”），
+  // 先按行剥离写作自述（“我必须只输出…”“让我写…”“实际上，仔细看看…”），再找强场景句截断。
+  const lines = text.split('\n');
+  let lineStart = 0;
+  for (let i = 0; i < lines.length && i < 5; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (/^(我必须|让我|我要|我只|只输出|实际上，?|仔细|来看看|来看|先看看|我需要|我先|我应该|好的|好，|嗯，|现在|注意|下面|接下来|上一步|上一轮|第一拍|第二拍|第三拍|我写|其实|然后|在|而|但|不过)/.test(line) ||
+        /(只输出正文|不加开头|干净版本|写一个|风格|视角|保持一致|待修正文|事件日志|看看|估算|导演要求|最终节拍|可用事件|我会这样处理|重新考虑|让我重新)/.test(line)) {
+      lineStart = i + 1;
+    } else {
+      break;
+    }
+  }
+  if (lineStart > 0) text = lines.slice(lineStart).join('\n').trim();
+
+  // 首段如果是“说明性/提纲式”句式（在…上 / 为… / 带有…效果 / 然后 / 实际上 等高频出现），
+  // 说明模型把设定说明当成了正文开头，整段剥离，直到出现真正的场景/动作/对话。
+  const paragraphs2 = text.split(/\n\s*\n/);
+  let paraStart = 0;
+  for (let i = 0; i < paragraphs2.length && i < 5; i++) {
+    const para = paragraphs2[i].replace(/\s+/g, ' ').trim();
+    if (!para) continue;
+    const explanationScore =
+      (para.match(/(然后|在.{0,8}(上|里|处)|为[““']|带有.{0,6}效果|实际上|其实|也就是说|这意味着|让我|我需要|用户说|导演要求|会这样处理|重新考虑|现在，我需要|最后|首先|其次)/g) || []).length;
+    const isRealScene = /(【|「|冷蓝|操场|广播|系统音|苏见山.{0,6}(站|走|抬|蹲|看|望|攥|挡|没|扫|低头)|赵铁山|白晏|所有人|天空|一脚|忽然|突然|轰|吱|嗡)/.test(para);
+    if (explanationScore >= 2 && !isRealScene) {
+      paraStart = i + 1;
+    } else {
+      break;
+    }
+  }
+  if (paraStart > 0) text = paragraphs2.slice(paraStart).join('\n\n').trim();
+
+  const firstLine = text.split(/\n/)[0] ?? '';
+  const sceneStart = firstLine.search(/(【[^】]+】|「文明|冷蓝色?的光屏|冷蓝|淡金|操场|江城一高|广播|系统音|低沉的|光屏|天空|教室|门口|人群中|所有人|无数目光|苏见山|赵铁山|白晏)/);
+  if (sceneStart > 0 && sceneStart < firstLine.length) {
+    const candidate = text.slice(sceneStart).trim();
+    if (candidate.length > 80) text = candidate;
+  }
+
+  // 剥离修稿模型在正文末尾追加的思考/统计/说明性内容：
+  // 常见开头如“现在数数”“我数汉字”“第一段…= 39”“草稿”“目标约”“字数统计”“让我数”。
+  // 允许其前面出现 --- / ——— 分隔线或空行；匹配到即从该行起截断，覆盖后续多行统计。
+  // 注意“第一段路”这类正常正文不算元内容，故“第N段”后需紧跟冒号/等号/逗号/换行/句号才算统计段。
+  const metaStartRe = /(?:^|\n)\s*(?:[-—]{2,}\s*)?(?:(?:现在|下面|我|让我)[来要]*[数统概梳整理核对计算]+|字数统计|可读字符|目标约|草稿[:：]?|修正后字数|(?:第一|第二|第三|第四|第五|第六)[一二三四五六七八九十\d]*段(?=\s*[:：=，,。]))[^\n]*/;
+  const metaMatch = text.match(metaStartRe);
+  let cleaned = text;
+  if (metaMatch && typeof metaMatch.index === 'number') {
+    cleaned = text.slice(0, metaMatch.index).trim();
+  }
+  return cleaned.length > 0 ? cleaned : text;
 }
 
 function buildRepairMessages(input: {
@@ -285,10 +387,14 @@ function buildRepairMessages(input: {
   const targetLabel = formatChapterWordTarget(input.targetMin, input.targetMax);
   const compressMode = input.issues.some((issue) => issue.code === 'too_long');
   const targetMid = Math.floor((input.targetMin + input.targetMax) / 2);
+  const currentCount = input.issues.find((issue) => issue.code === 'too_long' || issue.code === 'too_short')?.message.match(/\d+/)?.[0];
   const wordTargetRule =
     input.enforceWordTarget === false
       ? '- 这次是局部修正，不要为了字数重写全章；保持原稿篇幅和段落结构，优先修正硬性事实错误。'
       : `- 正文可读字数必须落在 ${targetLabel}；系统统计时会排除空格、换行和标点，但正文必须保留正常中文标点。`;
+  const compressRule = compressMode
+    ? `- 当前稿过长，必须一次压缩到位：可读字数必须 ≤ ${input.targetMax}（目标约 ${targetMid}）。当前约 ${currentCount} 字，至少删减掉重复人群反应、同义解释、重复心理、拖慢节奏的铺陈和无关细节；不要扩写。如果压缩后仍超过，系统会继续打回重写，直到达标。`
+    : `- 如果当前稿过短，只扩写当前章已经发生的日常、违和、反应、对话、心理、环境和余波。`;
   return [
     {
       role: 'system',
@@ -297,11 +403,17 @@ function buildRepairMessages(input: {
 硬性修稿要求：
 - 先修正列出的失败项，再保持原文主要情节、叙述视角和章节节奏。
 ${wordTargetRule}
-- ${compressMode ? `当前稿过长，必须压缩到约 ${targetMid} 可读字。删除重复人群反应、同义解释、重复心理和拖慢节奏的铺陈，不要扩写。` : '如果当前稿过短，只扩写当前章已经发生的日常、违和、反应、对话、心理、环境和余波。'}
+${compressRule}
 - 涉及角色性别、身份、关系、姓名时，以“人物基础设定库”为最高事实约束。
 - 不要新增当前章之外的大节点，不要提前兑现后续体系、装备、技能、等级、掉落或组织制度。
 - 如果失败项要求补经验/等级/掉落/奖励反馈，必须贴近有效贡献者写出短促、可结算的文本锚点，例如“苏见山眼前一闪：【经验 +20】”；不要写成长篇教学面板。
-- 不要为了计数删掉标点；中文句读要正常。`,
+- 不要为了计数删掉标点；中文句读要正常。
+
+输出纪律（违反任何一条都会判定为不合格）：
+1. 你的整个输出就是小说正文本身，从第一个字到最后一个字都必须是正文。
+2. 禁止输出任何元内容：不得写“草稿”“我来写”“我需要压缩”“字数统计”“现在我数一下”“第一段…= 39”“目标约2400”“保留现有内容的关键节拍”等思考、计划、计数或说明。
+3. 不得以“用户需要我”“我必须”“首先”“好的”等开头，不得在正文前后追加任何解释。
+4. 直接以正文第一句开始，正文最后一句自然结束。`,
     },
     {
       role: 'user',
@@ -337,7 +449,7 @@ ${input.content.slice(0, 9000)}
 """
 
 # 输出
-直接输出修正后的完整中文小说正文。`,
+直接输出修正后的完整中文小说正文。你的全部输出就是正文本身：第一个字符必须是正文第一句，最后一个字符必须是正文结尾，不得包含任何字数统计、修改说明、草稿标注或“以下是正文”之类的元内容。`,
     },
   ];
 }
@@ -373,7 +485,7 @@ export async function repairChapterUntilValid(input: {
     instruction: input.instruction,
     previousChapterBridge: input.previousChapterBridge,
   });
-  const maxAttempts = input.maxAttempts ?? 2;
+  const maxAttempts = input.maxAttempts ?? 4;
   let repairAttempts = 0;
 
   while (validation.issues.length > 0 && repairAttempts < maxAttempts) {
@@ -410,5 +522,59 @@ export async function repairChapterUntilValid(input: {
     });
   }
 
+  // 保底：LLM 修稿仍压不下来时，按句号断句截断到目标上限内，保证正文可以落库。
+  if (input.enforceWordTarget !== false && validation.issues.some((issue) => issue.code === 'too_long')) {
+    const truncated = truncateToMaxLength(content, input.targetMax);
+    if (truncated !== content) {
+      content = truncated;
+      validation = validateChapterContent({
+        content,
+        targetMin: input.targetMin,
+        targetMax: input.targetMax,
+        characters: input.characters,
+        requiredCharacterNames: input.requiredCharacterNames,
+        enforceWordTarget: input.enforceWordTarget,
+        currentChapter: input.currentChapter,
+        storyDesign: input.storyDesign,
+        instruction: input.instruction,
+        previousChapterBridge: input.previousChapterBridge,
+      });
+      repairAttempts += 1;
+    }
+  }
+
+  // 最终清理：剥离修稿模型混入正文首尾的思考/统计/规划文字。
+  const finalCleaned = cleanChapterText(content);
+  if (finalCleaned !== content) {
+    content = finalCleaned;
+    validation = validateChapterContent({
+      content,
+      targetMin: input.targetMin,
+      targetMax: input.targetMax,
+      characters: input.characters,
+      requiredCharacterNames: input.requiredCharacterNames,
+      enforceWordTarget: input.enforceWordTarget,
+      currentChapter: input.currentChapter,
+      storyDesign: input.storyDesign,
+      instruction: input.instruction,
+      previousChapterBridge: input.previousChapterBridge,
+    });
+  }
+
   return { content, validation, repairAttempts };
+}
+
+/** 把超长正文按句子边界截断到目标可读字数以内（优先保留开头完整场面）。 */
+function truncateToMaxLength(content: string, targetMax: number): string {
+  const sentences = content.split(/(?<=[。！？])/);
+  let current = '';
+  let count = 0;
+  for (const sentence of sentences) {
+    const sentenceCount = countReadableChars(sentence);
+    if (count + sentenceCount > targetMax) break;
+    current += sentence;
+    count += sentenceCount;
+  }
+  const result = current.trim();
+  return result.length > 0 && result !== content.trim() ? result : content.trim();
 }
