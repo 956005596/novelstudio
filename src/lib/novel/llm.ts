@@ -59,6 +59,8 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  /** 强制模型输出 JSON 对象（response_format: json_object），用于需要结构化输出的 agent。 */
+  json?: boolean;
 }
 
 const MAX_RETRIES = 5;
@@ -84,6 +86,7 @@ type ChatPayload = {
   temperature: number;
   max_tokens: number;
   stream?: boolean;
+  response_format?: { type: 'json_object' };
 };
 
 type ResponsesPayload = {
@@ -201,6 +204,7 @@ function buildPayload(
     temperature: options.temperature ?? (stream ? 0.85 : 0.8),
     max_tokens: options.maxTokens ?? (stream ? 4096 : 2048),
     ...(stream ? { stream: true } : {}),
+    ...(options.json && !stream ? { response_format: { type: 'json_object' as const } } : {}),
   };
 }
 

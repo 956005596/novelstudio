@@ -602,6 +602,8 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
   const [guideOpen, setGuideOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'story' | 'assets' | 'characters' | 'outline' | 'discuss'>('story');
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null);
   const [rewritingChapterId, setRewritingChapterId] = useState('');
   const [selectingCanonicalId, setSelectingCanonicalId] = useState('');
@@ -1092,6 +1094,66 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
       toast.error(err.message || '总纲补充保存失败');
     }
 	  };
+  const handleWriterHintSave = async (hint: string) => {
+    if (!store.worldState) return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}/story-bible-notes`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storyBibleNotes: store.worldState.storyBibleNotes ?? '', writerHint: hint.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '题材风格保存失败');
+      if (data.worldState) store._onWorldUpdate(data.worldState);
+            toast.success('题材风格已保存，Director/设计师/角色/Writer/评审都会遵循');
+    } catch (err: any) {
+      toast.error(err.message || '题材风格保存失败');
+    }
+  };
+
+  /** 统一意见入口：根据内容自动分流到 导演指令 / 圆桌讨论 / 题材风格。 */
+  const handleFeedbackSubmit = async () => {
+    const text = feedbackText.trim();
+    if (!text) return;
+    setFeedbackOpen(false);
+    setFeedbackText('');
+    // 风格/调性类：更新题材风格（追加到现有 writerHint）
+    const styleRe = /(风格|调性|节奏|写法|文风|偏甜宠|更虐|更爽|更搞笑|轻松|氛围|文笔|叙述|描写|爽点|虐点|恋爱感|拉扯感)/;
+    // 设定/世界观/角色设定类：走圆桌讨论，让 AI 评估影响范围并给方案
+    const settingRe = /(设定|世界观|角色.{0,6}(设定|天赋|性格|身份)|天赋|等级|应该|不该|不应该|为什么|设定里|档案里|大纲|剧情走向|伏笔|逻辑|不合理|矛盾|冲突)/;
+    // 当前章演绎/正文类：走 Director 最高优先级指令
+    const chapterRe = /(这段|本章|当前章|这一章|正文|演绎|角色.{0,6}(走位|位置|行动)|太.{0,4}(慢|快|乱)|跳脱|突兀|没看懂|看不懂)/;
+
+    if (styleRe.test(text) && !settingRe.test(text)) {
+      const current = store.worldState?.writerHint ?? '';
+      const merged = current.trim() ? `${current.trim()}\n- ${text}` : `- ${text}`;
+      await handleWriterHintSave(merged);
+      toast.success('已按题材风格处理：更新为全体 Agent 遵循的写作风格');
+      return;
+    }
+    if (settingRe.test(text)) {
+      showOperation('意见进入 AI 评估', '剧情设计师 / Director / 审核正在分析影响范围并给方案', 0);
+      await handleRoundtableSubmit(text);
+      toast.success('已按设定意见处理：交给剧情设计师 / Director / 审核评估并给方案');
+      return;
+    }
+    // 默认：当前章演绎类 → Director 最高优先级指令
+    if (store.connected) {
+      showOperation('发送 Director 指令', '正在按意见校准本章导演设计与后续演绎', 0);
+      const ok = await store.sendDirectorCommand(text, { refreshDesign: true, priority: true });
+      if (ok) {
+        showOperation('校准导演设计', '指令已接收，正在重算本章导演设计', 10000);
+        toast.success('已按当前章意见处理：作为最高优先级导演指令');
+      } else {
+        clearOperation();
+        toast.error('Director 指令发送失败');
+      }
+    } else {
+      toast.error('未连接演绎引擎，无法发送导演指令');
+    }
+  };
+
+
   const handleAgentPolicySave = (patch: Partial<AgentPolicy>) => {
     const current = normalizeAgentPolicy(store.worldState?.agentPolicy);
     store.sendWorldEdit({
@@ -1117,7 +1179,7 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
       return;
     }
     if (!isChapterAtClosure) {
-      toast.info(`本章还没到收束点（${chapterProgress}/${chapterTargetTurns}），先继续演绎`);
+      toast.info('本章事件还没到收束点，先继续演绎，事件足够后再生成正文');
       return;
 	    }
 	    if (!(await ensureModelUsable('生成正文'))) return;
@@ -1241,8 +1303,8 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
 	    store.retreatChapter();
 	    toast.info('已切回上一章焦点，不删除已生成记录');
 	  };
-  const handleRoundtableSubmit = async () => {
-    const topic = roundtableTopic.trim();
+  const handleRoundtableSubmit = async (topicOverride?: string) => {
+    const topic = (topicOverride ?? roundtableTopic).trim();
     if (!topic) return;
 	    if (!(await ensureModelUsable('发起设计讨论'))) return;
       setRoundtableError('');
@@ -1925,6 +1987,14 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
             </Button>
             <Button
               size="sm"
+              onClick={() => setFeedbackOpen(true)}
+              title="提出意见，系统自动分流到导演指令 / AI 商量 / 题材风格"
+              className="border-amber-400/60 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+            >
+              <MessagesSquare className="h-4 w-4 mr-1" /> 提意见
+            </Button>
+            <Button
+              size="sm"
               variant={modelConfig?.configured ? 'outline' : 'secondary'}
               onClick={() => setModelDialogOpen(true)}
               title={
@@ -2197,6 +2267,7 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
 	                  onAdoptDiscussion={handleAdoptRoundtable}
 	                  onGenerateOutlineFromDiscussion={handleOutlineRevisionFromDiscussion}
 	                  onApplyOutlineFromDiscussion={handleApplyOutlineRevisionFromDiscussion}
+	                  onOpenFeedback={() => setFeedbackOpen(true)}
 	                  onRewriteAdoptedChapter={(entry) => {
                     const currentDraft = currentChapterCompletedChapters[0];
                     if (!currentDraft) {
@@ -2371,6 +2442,8 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
         projectId={projectId}
         storyBibleNotes={store.worldState?.storyBibleNotes ?? ''}
         onSaveStoryBible={handleStoryBibleNotesSave}
+        writerHint={store.worldState?.writerHint ?? ''}
+        onSaveWriterHint={handleWriterHintSave}
         roundtableTopic={roundtableTopic}
         setRoundtableTopic={setRoundtableTopic}
         roundtableLoading={roundtableLoading}
@@ -2398,6 +2471,13 @@ export function LiveView({ projectId, projectName, onProjectRenamed, onBack }: {
         onSyncStoryBible={handleSyncStoryBible}
         syncingStoryBible={storyBibleSyncing}
       />
+      <FeedbackDialog
+        open={feedbackOpen}
+        onOpenChange={setFeedbackOpen}
+        text={feedbackText}
+        setText={setFeedbackText}
+        onSubmit={handleFeedbackSubmit}
+      />
     </div>
   );
 }
@@ -2410,6 +2490,8 @@ function SettingsDialog({
   projectId,
   storyBibleNotes,
   onSaveStoryBible,
+  writerHint,
+  onSaveWriterHint,
   roundtableTopic,
   setRoundtableTopic,
   roundtableLoading,
@@ -2441,6 +2523,8 @@ function SettingsDialog({
   projectId: string;
   storyBibleNotes: string;
   onSaveStoryBible: (notes: string) => void;
+  writerHint: string;
+  onSaveWriterHint: (hint: string) => void;
   roundtableTopic: string;
   setRoundtableTopic: (topic: string) => void;
   roundtableLoading: boolean;
@@ -2466,6 +2550,7 @@ function SettingsDialog({
   syncingStoryBible: boolean;
 }) {
   const [notesDraft, setNotesDraft] = useState(storyBibleNotes ?? '');
+  const [hintDraft, setHintDraft] = useState(writerHint ?? '');
   const [discussDraft, setDiscussDraft] = useState('');
 
   const tabs: Array<{ key: typeof tab; label: string; icon: React.ReactNode; desc: string }> = [
@@ -2539,6 +2624,29 @@ function SettingsDialog({
                   <span className="text-[11px] text-muted-foreground">
                     {notesDraft.trim() === (storyBibleNotes ?? '').trim() ? '已保存' : '有未保存修改'}
                   </span>
+                </div>
+
+                <div className="rounded-md border bg-muted/10 p-3">
+                  <div className="text-sm font-medium">题材风格</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    用一句话描述这个题材的调性。Director、剧情设计师、角色演员、Writer 和评审都会按它来创作与判断，
+                    而不是套用通用模板。例：都市虐恋·暧昧拉扯·细腻心理·误会推进；或 悬疑推理·冷硬文风·线索层层反转。
+                  </div>
+                  <Textarea
+                    value={hintDraft}
+                    onChange={(e) => setHintDraft(e.target.value)}
+                    rows={4}
+                    className="mt-2 font-mono text-xs"
+                    placeholder="例：都市虐恋，暧昧拉扯，细腻心理描写，误会推进，节奏舒缓。"
+                  />
+                  <div className="mt-2 flex items-center gap-2">
+                    <Button size="sm" onClick={() => onSaveWriterHint(hintDraft)}>
+                      保存题材风格
+                    </Button>
+                    <span className="text-[11px] text-muted-foreground">
+                      {hintDraft.trim() === (writerHint ?? '').trim() ? '已保存' : '有未保存修改'}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
@@ -2619,6 +2727,76 @@ function SettingsDialog({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FeedbackDialog({
+  open,
+  onOpenChange,
+  text,
+  setText,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  text: string;
+  setText: (text: string) => void;
+  onSubmit: () => void;
+}) {
+  const examples = [
+    { label: '改设定', value: '赵铁山应该有天赋，设定里他是觉醒者' },
+    { label: '改风格', value: '这本更偏甜宠，节奏要更快，多加拉扯感' },
+    { label: '改这章', value: '这一章赵铁山的位置跳脱了，他应该守在裂口边' },
+  ];
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MessagesSquare className="h-5 w-5 text-amber-600" /> 提意见
+          </DialogTitle>
+          <DialogDescription>
+            系统会自动判断该走哪条链路，不用你自己选：
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+            <div className="flex flex-col gap-1">
+              <span>· <b>设定类</b>（天赋/世界观/角色设定/剧情矛盾）→ 交给 AI 商量，评估影响范围并给方案</span>
+              <span>· <b>风格类</b>（节奏/文风/甜宠/虐感/爽点）→ 更新题材风格，全体 Agent 遵循</span>
+              <span>· <b>当前章类</b>（这段/本章/演绎/正文）→ 作为最高优先级导演指令，校准后续演绎</span>
+            </div>
+          </div>
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            placeholder="直接说你的意见，例如：赵铁山应该有天赋，设定里他是觉醒者…"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            <span className="text-[11px] py-1 text-muted-foreground">试试：</span>
+            {examples.map((ex) => (
+              <button
+                key={ex.label}
+                type="button"
+                className="rounded-md border bg-muted/50 px-2 py-1 text-[11px] hover:bg-muted transition-colors"
+                onClick={() => setText(ex.value)}
+              >
+                {ex.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
+              取消
+            </Button>
+            <Button size="sm" disabled={!text.trim()} onClick={onSubmit}>
+              提交意见
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -2824,7 +3002,7 @@ function CenterStepStartBar({
       ? 'Writer 正在流式输出，本页会持续更新。'
       : atClosure
         ? `用本章 ${eventsCount} 条事件生成 ${chapterWordLabelOf(currentChapter)} 正文。`
-        : `正文要等事件收束后再写；章节自循环会执行：${autoFlowLabel}。当前 ${chapterProgress}/${chapterTargetTurns}。`;
+        : `正文要等事件积累到收束点后再写；章节自循环会执行：${autoFlowLabel}。当前已发生 ${eventsCount} 条事件。`;
     icon = atClosure ? <FileText className="mr-1 h-3.5 w-3.5" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />;
     label = writerActive ? '写作中' : atClosure ? (completedCount > 0 ? '再写一稿' : '开始写作') : '章节自循环';
     onClick = atClosure ? onWriteChapter : onChapterAuto;
@@ -2937,8 +3115,6 @@ function RunStatusBar({
           </span>
         </div>
         <div className="hidden shrink-0 items-center gap-2 text-[11px] lg:flex">
-          <span>本章 {chapterProgress}/{targetTurns} 轮</span>
-          <span className="text-border">·</span>
           <span>事件 {eventCount}</span>
           <span className="text-border">·</span>
           <button
@@ -3004,7 +3180,7 @@ function WorkspaceNavigator({
       view: 'events',
       icon: <Activity className="h-3.5 w-3.5" />,
       label: '事件日志',
-      detail: `${eventsCount} 条 · ${progressNow}/${targetTurns} 轮`,
+      detail: `${eventsCount} 条`,
       done: progressNow >= targetTurns && eventsCount > 0,
       attention: progressNow >= targetTurns && completedCount === 0,
     },
@@ -5074,6 +5250,7 @@ function StoryDesignPanel({
 	  onAdoptDiscussion,
 	  onGenerateOutlineFromDiscussion,
 	  onApplyOutlineFromDiscussion,
+	  onOpenFeedback,
 	  onRewriteAdoptedChapter,
   fullHeight,
 }: {
@@ -5115,6 +5292,7 @@ function StoryDesignPanel({
   onShowOutlineProposal: () => void;
 	  onDiscussionSubmit: () => void;
 	  onAdoptDiscussion: (entry: RoundtableEntry) => void;
+	  onOpenFeedback: () => void;
 	  onGenerateOutlineFromDiscussion: (entry: RoundtableEntry) => void;
 	  onApplyOutlineFromDiscussion: (entry: RoundtableEntry) => void;
 	  onRewriteAdoptedChapter: (entry: RoundtableEntry) => void;
@@ -5545,7 +5723,7 @@ function StoryDesignNextStepBar({
     );
   } else if (hasEnoughEvents) {
     title = '本章已到收束点，生成正文';
-    desc = `本章进度 ${progressNow}/${targetTurns}，继续演绎会污染当前章事件；现在用已有事件写正文。`;
+    desc = `继续演绎会污染当前章事件；现在用已有 ${eventsCount} 条事件写正文。`;
     primary = (
       <Button size="sm" className="h-8 text-xs" onClick={onWriteChapter} disabled={actionDisabled}>
         <FileText className="mr-1 h-3.5 w-3.5" /> 生成正文
@@ -5558,7 +5736,7 @@ function StoryDesignNextStepBar({
     );
   } else {
     title = '继续围绕本章演绎';
-    desc = `本章进度 ${progressNow}/${targetTurns}，已有 ${eventsCount} 条事件；补足事件后再生成正文。`;
+    desc = `已有 ${eventsCount} 条事件；继续演绎补足素材后再生成正文。`;
     primary = (
       <Button size="sm" className="h-8 text-xs" onClick={onStart} disabled={actionDisabled}>
         <Play className="mr-1 h-3.5 w-3.5" /> 演绎一轮
@@ -5583,8 +5761,6 @@ function StoryDesignNextStepBar({
           </div>
           <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{desc}</div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-            <span>进度 {progressNow}/{targetTurns}</span>
-            <span className="text-border">·</span>
             <span>事件 {eventsCount}</span>
             <span className="text-border">·</span>
             <span>正文 {completedCount}</span>

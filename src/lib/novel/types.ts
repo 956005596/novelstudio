@@ -183,6 +183,7 @@ export interface CharacterPersona {
   speechHabits?: string[];     // 口头禅/语言习惯
   appearance?: string;         // 外貌特征
   actingTemperature?: number;  // 该角色专属采样温度（0.4-1.2），覆盖全局 actorTemperature；性格越跳脱越放越高，越克制越放越低
+  actingModel?: string;        // 该角色专属模型（覆盖全局默认模型）。不同性格的角色可用不同模型扮演，例如冲动角色用更鲜活的大模型、冷静配角用轻量模型
 }
 
 export interface CharacterState {
@@ -195,6 +196,10 @@ export interface CharacterState {
   exp?: number;
   nextLevelExp?: number;
   buffs?: string[];
+  /** 身体状态：当前伤势/伤口/疼痛等，跨轮持续，防止角色每轮脑补或遗忘。 */
+  injuries?: string[];
+  /** 身体感受：此刻的身体直觉（如手发烫、腿发软、嗓子干），供角色代入。 */
+  bodySensation?: string;
 }
 
 export interface Character {

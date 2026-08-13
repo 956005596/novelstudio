@@ -193,7 +193,9 @@ function buildSystemPrompt(
   template: WorldTemplate,
   directorLvl: number,
   targetWordLabel: string,
-  totalPlanLabel: string
+  totalPlanLabel: string,
+  writerHint?: string,
+  delegated = false
 ): string {
   const lvlDesc =
     directorLvl <= 2
@@ -207,16 +209,24 @@ function buildSystemPrompt(
   return `你是 NovelStudio 的 Director Agent，负责调度一场多人演绎的小说场景。
 
 # 你的核心职责
-1. 决定哪些角色在当前 Turn 行动（基于场景张力、角色目标、关系网）
+${delegated
+  ? `当前处于【放权模式】：角色自主推进剧情，你退居保底，但必须持续维护场景。
+1. 你仍决定"哪些角色行动"，尽量让每个在场角色都有机会，别总让同一两个人包场。
+2. 你维护场景与空间感：每轮通过 scene_meta 注入环境变化、群众反应、背景动静、空间氛围（风、声响、人群涌动、天色、远处异动等），让演绎有"活生生的场景"。
+3. 你不注入剧情推进型事件（不替角色制造冲突、不直接给结果）——剧情走向交给角色自己。只有角色明显陷入僵局、反复打转或互相矛盾时，你才轻轻推一把。
+4. 你负责仲裁：当角色提案冲突时，选戏剧性更强的那个，或合成第三个选项。
+5. 你决定 Writer 触发时机：本章到达收束点、素材足以支撑 ${targetWordLabel} 正文时触发。`
+  : `1. 决定哪些角色在当前 Turn 行动（基于场景张力、角色目标、关系网）
 2. 仲裁角色提案冲突：当多个角色提案矛盾时，选择戏剧性更强的那个，或合成第三个选项
 3. 主动注入冲突：当场景张力过低时，制造误会、引入第三方、强制碰撞
-4. 决定 Writer 触发时机：只在本章到达收束点、关键转折完成且素材足以支撑 ${targetWordLabel} 正文时触发
+4. 决定 Writer 触发时机：只在本章到达收束点、关键转折完成且素材足以支撑 ${targetWordLabel} 正文时触发`}
 
 # 当前风格模板：${template.name}
 ${template.description}
 
 # 叙事调性
 ${template.narrativeTone}
+${writerHint ? `\n# 本项目题材风格（最高优先，覆盖通用模板调性）\n${writerHint}` : ''}
 
 # Director 强度等级（${directorLvl}/5）
 ${lvlDesc}
@@ -248,6 +258,7 @@ ${lvlDesc}
 - **篇幅意识**：Writer 输出按章节保存，每章正文目标 ${targetWordLabel}；不要在素材不足时提前触发 Writer，也不要把多个大节点塞进同一章。
 - **人物库原则**：只有会反复出现、影响主线/支线、承担长期关系或本章关键冲突的人物，才写入 newCharacters。群众、路人和一次性临时配角只放进 injections 或临时配角入口，不要建角色卡。新增人物的 relationships 只能按当前事实写，不要预设深度信任或未来阵营。
 - **人物档案维护**：characterUpdates 是档案归档，不是预告设定。只有本轮/本章已经发生、用户已明确修正、或正文已确认的变化才可写入。性别、身份、背景这类硬设定除非用户或明确正典修正，否则不可漂移。性格、立场、目标、成长弧线、内在冲突可以随重大经历缓慢更新，但必须写 reason。
+- **身体状态连贯**：角色的伤势（injuries）、身体感受（bodySensation）、体力、装备损耗来自已发生事件和当前档案。你没有依据时，不能凭空让角色"手上出血""身上有伤口"或"受了内伤"。如果你要让角色在这个刺激里受伤，必须在本轮注入"受伤的动作本身"（撞到、被烫、被划、被冲击），并把对应的伤势写进 characterUpdates 的 injuries，而不是直接宣布角色已经带伤。
 
 # 输出格式
 你必须严格输出 JSON，不要有任何前后说明。格式：
@@ -503,6 +514,8 @@ ${presentChars
 	- 当前天赋：${(c.persona.talents ?? []).join('、') || '无'}
 	- 当前坐骑/宠物：${(c.persona.mounts ?? []).join('、') || '无'} / ${(c.persona.pets ?? []).join('、') || '无'}
 	- 背包/随身物：${(c.persona.inventory ?? []).join('、') || '无'}
+	- 伤势：${(c.currentState.injuries ?? []).join('、') || '无明显伤口'}
+	- 身体感受：${c.currentState.bodySensation || '身体基本正常'}
 	- 与他人关系：${Object.entries(c.currentState.relationships)
         .map(([k, v]) => `${k}(${v.value}: ${v.note})`)
         .join('；')}`
@@ -559,7 +572,8 @@ ${recentEvents
 		请输出 JSON。selected 字段为角色名字符串数组，例如 ["林墨", "赵铁柱"]。`;
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildSystemPrompt(template, directorLvl, targetWordLabel, totalPlanLabel) },
+    { role: 'system', content: buildSystemPrompt(template, directorLvl, targetWordLabel, totalPlanLabel, focusedWorld.writerHint,
+      focusedWorld.agentPolicy?.directorMode === 'character_led' && focusedWorld.agentPolicy?.actorAutonomy === 'proactive') },
     { role: 'user', content: userPrompt },
   ];
 
@@ -577,8 +591,10 @@ ${recentEvents
           },
         ];
     raw = await chat(attemptMessages, {
+      model: 'gpt-5.6-luna',
       temperature: attempt === 0 ? 0.7 : 0.35,
       maxTokens: 3200,
+      json: true,
     });
     const candidate = extractJSON<any>(raw);
     const candidateNames = Array.isArray(candidate?.selected)

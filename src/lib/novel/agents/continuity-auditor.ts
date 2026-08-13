@@ -121,6 +121,7 @@ ${characterStateText}
     raw = await chat(attemptMessages, {
       temperature: attempt === 0 ? 0.1 : 0,
       maxTokens: 5200,
+      json: true,
     });
     const parsed = extractJSON<AuditDraft>(raw);
     const issues = stringList(parsed?.issues);

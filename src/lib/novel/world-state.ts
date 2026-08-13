@@ -360,7 +360,8 @@ export class WorldManager {
  */
 export async function createProject(
   name: string,
-  templateKey: string = 'online-game'
+  templateKey: string = 'online-game',
+  writerHint?: string
 ): Promise<string> {
   const tpl = getTemplate(templateKey);
   const initialWorld: WorldState = ensureChapterFocus({
@@ -373,6 +374,7 @@ export async function createProject(
     tension: 3,
     turn: 0,
     agentPolicy: { ...DEFAULT_AGENT_POLICY },
+    ...(writerHint?.trim() ? { writerHint: writerHint.trim() } : {}),
   });
 
   const project = await db.project.create({

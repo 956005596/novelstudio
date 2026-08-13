@@ -303,6 +303,12 @@ function addUnique(base: string[] | undefined, additions?: string[]): string[] {
   return next;
 }
 
+/** 追加但限制长度：新目标靠后，超出上限时丢弃最旧的，避免跨章节无限累积旧目标污染后续演绎。 */
+function addUniqueLimited(base: string[] | undefined, additions?: string[], limit = 6): string[] {
+  const next = addUnique(base, additions);
+  return next.length > limit ? next.slice(next.length - limit) : next;
+}
+
 function removeItems(base: string[] | undefined, removals?: string[]): string[] {
   const removeSet = new Set(normalizeList(removals));
   return normalizeList(base).filter((item) => !removeSet.has(item));
@@ -344,17 +350,17 @@ function mergeCharacterProgressUpdates(updates: CharacterProgressUpdate[]): Char
       evidenceEventIds: addUnique(existing.evidenceEventIds, update.evidenceEventIds),
       gender: existing.gender || update.gender,
       background: existing.background || update.background,
-      personality: addUnique(existing.personality, update.personality),
-      goals: addUnique(existing.goals, update.goals),
+      personality: addUniqueLimited(existing.personality, update.personality),
+      goals: addUniqueLimited(existing.goals, update.goals),
       stance: existing.stance || update.stance,
       speechStyle: existing.speechStyle || update.speechStyle,
       appearance: existing.appearance || update.appearance,
       backstory: existing.backstory || update.backstory,
       growthArc: existing.growthArc || update.growthArc,
       innerConflict: existing.innerConflict || update.innerConflict,
-      secrets: addUnique(existing.secrets, update.secrets),
-      motivations: addUnique(existing.motivations, update.motivations),
-      speechHabits: addUnique(existing.speechHabits, update.speechHabits),
+      secrets: addUniqueLimited(existing.secrets, update.secrets),
+      motivations: addUniqueLimited(existing.motivations, update.motivations),
+      speechHabits: addUniqueLimited(existing.speechHabits, update.speechHabits),
       level: Math.max(existingLevel ?? 0, level ?? 0) || undefined,
       expDelta: Math.max(existingExpDelta ?? 0, expDelta ?? 0) || undefined,
       profession: existing.profession || update.profession,
@@ -493,6 +499,8 @@ export class NovelEngine {
   private chapterStartTurn = 0;
   private chapterBuffer: NovelEvent[] = [];
   private lastWriterText = '';
+  /** 放权模式下记录每个角色最近行动轮，用于轮流调度。 */
+  private lastActorTurn: Record<string, number> = {};
   private autoImproveMode = false;
 
   constructor(projectId: string, cb: EngineCallbacks) {
@@ -897,6 +905,10 @@ export class NovelEngine {
     const loaded = await this.wm.loadProject();
     const worldState = ensureChapterFocus(loaded.worldState);
     const initialAgentPolicy = normalizeAgentPolicy(worldState.agentPolicy);
+    // 放权模式：导演只做保底，角色自主推进剧情。
+    const isDirectorDelegated =
+      initialAgentPolicy.directorMode === 'character_led' &&
+      initialAgentPolicy.actorAutonomy === 'proactive';
     const { characters } = loaded;
     let latestCharacters = characters;
     const recentEvents = await this.wm.getRecentEvents(20);
@@ -1006,9 +1018,14 @@ export class NovelEngine {
     }
 
     // === 2. 注入 Director 事件 ===
-    const allowedInjections = agentPolicy.directorCanIntervene ? (decision.injections ?? []).slice(0, 1) : [];
-    if (!agentPolicy.directorCanIntervene && (decision.injections?.length ?? 0) > 0) {
-      this.emitLog('warn', 'Agent 权限：Director 跑偏干预已关闭，本轮 injections 已忽略');
+    // 放权模式下：保留 scene_meta（场景/环境/群众反应，维护背景与空间感），
+    // 跳过 director 型注入（剧情推进/冲突制造），让角色自主推进剧情。
+    const candidateInjections = agentPolicy.directorCanIntervene ? (decision.injections ?? []) : [];
+    const allowedInjections = isDirectorDelegated
+      ? candidateInjections.filter((inj) => inj.type === 'scene_meta').slice(0, 1)
+      : candidateInjections.slice(0, 1);
+    if (isDirectorDelegated && candidateInjections.some((inj) => inj.type !== 'scene_meta')) {
+      this.emitLog('info', '放权模式：跳过 Director 剧情推进注入，保留场景维护；剧情由角色自主推进');
     }
     for (const inj of allowedInjections) {
       const event = await this.wm.appendEvent({
@@ -1043,6 +1060,18 @@ export class NovelEngine {
     }
 
     const maxActorsThisTurn = turnWorld.tension >= 8 ? 3 : 2;
+
+    // 放权模式下：角色轮流更均匀——优先让"最近没行动过"的角色行动，
+    // Director 的 selected 只作为参与池，不固定每轮同几个人。
+    if (isDirectorDelegated && presentChars.length > 1) {
+      const turnNow = turnWorld.turn;
+      const pool = presentChars
+        .map((c) => ({ c, last: this.lastActorTurn[c.id] ?? -Infinity }))
+        .sort((a, b) => a.last - b.last)
+        .map((item) => item.c);
+      selectedChars = pool.slice(0, maxActorsThisTurn);
+    }
+
     selectedChars = selectedChars.slice(0, maxActorsThisTurn);
 
     for (const c of selectedChars) {
@@ -1088,6 +1117,9 @@ export class NovelEngine {
       latestCharacters = latestCharacters.map((c) =>
         c.id === updatedCharacter.id ? updatedCharacter : c
       );
+      if (isDirectorDelegated) {
+        this.lastActorTurn[c.id] = turnWorld.turn;
+      }
     }
 
     // === 6. 应用本轮真实发生的成长/掉落/装备变化 ===
@@ -1279,17 +1311,17 @@ export class NovelEngine {
           ...character.persona,
           gender: genderChangeAllowed ? gender : character.persona.gender,
           background: background || character.persona.background,
-          personality: addUnique(character.persona.personality, update.personality),
-          goals: addUnique(character.persona.goals, update.goals),
+          personality: addUniqueLimited(character.persona.personality, update.personality),
+          goals: addUniqueLimited(character.persona.goals, update.goals),
           stance: stance || character.persona.stance,
           speechStyle: speechStyle || character.persona.speechStyle,
           appearance: appearance || character.persona.appearance,
           backstory: backstory || character.persona.backstory,
           growthArc: growthArc || character.persona.growthArc,
           innerConflict: innerConflict || character.persona.innerConflict,
-          secrets: addUnique(character.persona.secrets, update.secrets),
-          motivations: addUnique(character.persona.motivations, update.motivations),
-          speechHabits: addUnique(character.persona.speechHabits, update.speechHabits),
+          secrets: addUniqueLimited(character.persona.secrets, update.secrets),
+          motivations: addUniqueLimited(character.persona.motivations, update.motivations),
+          speechHabits: addUniqueLimited(character.persona.speechHabits, update.speechHabits),
           profession: update.profession || character.persona.profession,
           skills: removeItems(
             addUnique(character.persona.skills, update.addSkills),
@@ -1478,6 +1510,7 @@ export class NovelEngine {
         previousChapterBridge?.prompt,
         events.map((event) => `T${event.turn} ${event.agentName}/${event.type}: ${event.content}`).join('\n'),
       ].filter(Boolean).join('\n\n'),
+      eventText: events.map((event) => event.content).join('\n'),
       maxAttempts: 4,
     });
     if (repaired.validation.issues.length > 0) {
@@ -1535,6 +1568,7 @@ export class NovelEngine {
         ),
         previousText: previousChapterBridge?.prompt ?? previousWriterText,
         currentChapter: worldState.currentChapter,
+        writerHint: worldState.writerHint,
       });
       for (const review of reviews) {
         this.cb.emit({ type: 'reader:review', review });

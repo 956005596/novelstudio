@@ -119,6 +119,14 @@ ${focused.sceneDescription}
 	12. 若当前章还在前 1-2 Turn，或 chapter phase 仍是“铺垫/引爆前段”，eventSeeds 必须按“前兆/逼近 -> 误判或分歧 -> 被迫选择”组织，不能直接给完整袭击结果。除非最近事件已经明确写出敌人贴脸、建筑坍塌、人已受伤，否则不要把“直接扑倒、直接秒杀、直接撞飞”写成第一拍。
 		13. 当前章方向是时间锚。若初始场景、人物技能/装备/等级/位置明显写成了当前章之后的状态，设计必须服从当前章方向，把那些字段视为尚未发生，不得拿未来状态反推本章已经进入灾变或战斗。
 		14. eventSeeds 必须具体到“能拍成画面”：每个刺激包含对象、动作、至少一个感官细节和一个未解的悬念/代价；避免“人群骚动”“气氛紧张”这类抽象刺激。设定和意象可以华丽、猎奇、有压迫感，但都要能落到角色的眼睛、皮肤、耳朵和脚下。
+		14b. 本章意象边界（防跨章混用）：当前章是第 ${focused.currentChapter?.chapterNo ?? 1} 章，eventSeeds 里的具体意象必须来自「当前章焦点/节点描述/已发生事件」的范围内。
+		${(() => {
+      const chNo = focused.currentChapter?.chapterNo ?? 1;
+      return chNo <= 2
+        ? `第 ${chNo} 章属于"觉醒判定与校园首轮危机"开篇段。禁止引入【广播台】【裂缝/裂隙】【灰白弧面/灰白硬物】【禁退线/收声】【大壳怪/怪物】【伤者/血珠/渗血】【教堂叠影】等后续章节的专用意象。你可以用：面板/光纹/系统公告/人群分层/检测/空行/异常闪烁/杂音/推挤/外圈异响（但不得具体成某种怪物）。`
+        : '';
+    })()}
+		${focused.writerHint ? `15. 项目题材风格（最高优先，覆盖通用模板调性）：\n${focused.writerHint}\n	设计的情节刺激、体系种子、成长钩子和群体压力都必须服务这个题材风格，不要照搬“升级/打怪/掉落”的默认套路。` : ''}
 		15. 设计 JSON 总长不超过 1800 个中文字；currentBeat 和 scenePurpose 各不超过 100 字；每个数组最多 3 条，每条不超过 100 字。不写段落式剧情，只给 Director 可执行拍点。
 
 输出 JSON，不要 markdown：
@@ -199,8 +207,10 @@ ${focused.craftLessons.slice(-6).map((lesson, index) => {
           },
         ];
     raw = await chat(attemptMessages, {
+      model: 'gpt-5.6-luna',
       temperature: attempt === 0 ? 0.75 : 0.4,
       maxTokens: 8000,
+      json: true,
     });
     const parsed = extractJSON<StoryDesignDraft>(raw);
     const currentBeat = String(parsed?.currentBeat ?? '').trim();

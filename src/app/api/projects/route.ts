@@ -15,9 +15,10 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const name = body.name?.trim();
   const template = body.template ?? 'online-game';
+  const writerHint = typeof body.writerHint === 'string' ? body.writerHint.trim() : '';
   if (!name) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
   }
-  const id = await createProject(name, template);
+  const id = await createProject(name, template, writerHint);
   return NextResponse.json({ id });
 }

@@ -54,6 +54,7 @@ interface StageState {
 export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectName: string) => void }) {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [newName, setNewName] = useState('');
+  const [newHint, setNewHint] = useState('');
   const [loading, setLoading] = useState(false);
 
   // AI 生成模式
@@ -89,13 +90,14 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), template: 'online-game' }),
+        body: JSON.stringify({ name: newName.trim(), template: 'online-game', writerHint: newHint.trim() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '创建失败');
       toast.success(`项目「${newName.trim()}」已创建`);
       const createdName = newName.trim();
       setNewName('');
+      setNewHint('');
       await refresh();
       onEnter(data.id, createdName);
     } catch (e: any) {
@@ -485,6 +487,22 @@ export function SetupPanel({ onEnter }: { onEnter: (projectId: string, projectNa
               </div>
               <div className="text-xs text-muted-foreground mt-2">
                 预设模板包含 3 个固定角色（林墨/苏晚/赵铁柱）和预设场景，适合快速体验。
+              </div>
+              <div className="mt-3">
+                <label className="text-sm font-medium mb-1.5 block">
+                  题材风格 <span className="text-muted-foreground">（可选，会被所有创作 Agent 遵循）</span>
+                </label>
+                <textarea
+                  value={newHint}
+                  onChange={(e) => setNewHint(e.target.value)}
+                  rows={3}
+                  placeholder="例：都市虐恋，暧昧拉扯，细腻心理描写，误会推进，节奏舒缓。或：悬疑推理，线索层层反转，冷硬文风。或：轻松日常，吐槽流，快节奏爽感。"
+                  className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 flex w-full rounded-md border bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm min-h-[72px] resize-y"
+                  disabled={loading}
+                />
+                <div className="text-xs text-muted-foreground mt-1">
+                  Director、剧情设计师、角色演员、Writer 和评审都会按这个风格来创作与判断。
+                </div>
               </div>
             </TabsContent>
           </Tabs>

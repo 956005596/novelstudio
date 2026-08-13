@@ -176,6 +176,7 @@ export function validateChapterContent(input: {
   storyDesign?: StoryDesign;
   instruction?: string;
   previousChapterBridge?: ChapterBridgeContext | null;
+  eventText?: string;
 }): ChapterValidationResult {
   const readableCount = countReadableChars(input.content);
   const issues: ChapterValidationIssue[] = [];
@@ -183,7 +184,7 @@ export function validateChapterContent(input: {
 
   // 检测“设计复述/写作计划”混入：如果正文含有导演设计或修稿指令的结构性标题词，
   // 说明模型把设计 JSON 或计划照抄成了正文，而不是真的写了小说正文。
-  const designEchoRe = /(最终节拍|可用事件|体系奇观|设定护栏|成长[\/、]?掉落[\/、]?职业钩子|群众压力|临时配角入口|其余需要整合的上下文|写一段|这段要|这部分|然后过渡|我来写|我需要写|上面提到|如前所述|大纲：|结构：|节拍[:：])/;
+  const designEchoRe = /(最终节拍|可用事件|体系奇观|设定护栏|成长[\/、]?掉落[\/、]?职业钩子|群众压力|临时配角入口|其余需要整合的上下文|待修正文|目标约|大纲：|结构：|节拍[:：])/;
   const echoMatch = input.content.match(designEchoRe);
   if (echoMatch) {
     issues.push({
@@ -191,6 +192,33 @@ export function validateChapterContent(input: {
       fatal: true,
       message: `正文疑似混入了导演设计/写作计划（“${echoMatch[0].trim().slice(0, 20)}”），而不是完整的小说正文。请只输出正式小说正文，不要复述设计字段或写作思路。`,
     });
+  }
+
+  // 检测“越章意象”混入：正文出现事件日志中完全没有的、明确属于后续章节的专有名词，
+  // 说明 Writer 把后续章的场景（广播台对峙、大壳怪、禁退线等）错误写进了本章。
+  // 只用明确的后续章专有词，不用“伤口/血/裂缝”这类通用词，避免误伤正常创作。
+  if (input.eventText) {
+    const inventedImagery = [
+      { term: '广播台', pattern: /广播台|广播室/ },
+      { term: '大壳怪', pattern: /大壳怪|壳怪|巨壳/ },
+      { term: '禁退线', pattern: /禁退线|后撤线|收声|噤声/ },
+      { term: '教堂叠影', pattern: /教堂叠影|叠影/ },
+      { term: '静默求生', pattern: /静默求生|静默压制/ },
+      { term: '灰白硬物', pattern: /灰白(?:硬物|弧面|物)|弧面/ },
+      { term: '血痕', pattern: /血痕|渗血|拖出血|血珠/ },
+      { term: '裂缝', pattern: /墙根裂缝|砖缝里的裂缝|裂缝边缘/ },
+    ];
+    const eventSrc = input.eventText;
+    for (const item of inventedImagery) {
+      if (item.pattern.test(input.content) && !item.pattern.test(eventSrc)) {
+        issues.push({
+          code: 'design_echo',
+          fatal: true,
+          message: `正文出现了事件日志中没有的后续章意象“${item.term}”。请只写本章事件里真实发生的内容，不要把广播台、大壳怪、禁退线等后续章场景写进当前章。`,
+        });
+        break;
+      }
+    }
   }
 
   if (input.enforceWordTarget !== false && readableCount < input.targetMin) {
@@ -464,6 +492,7 @@ export async function repairChapterUntilValid(input: {
   storyDesign?: StoryDesign;
   instruction?: string;
   sourceContext?: string;
+  eventText?: string;
   maxAttempts?: number;
   enforceWordTarget?: boolean;
   previousChapterBridge?: ChapterBridgeContext | null;
@@ -484,6 +513,7 @@ export async function repairChapterUntilValid(input: {
     storyDesign: input.storyDesign,
     instruction: input.instruction,
     previousChapterBridge: input.previousChapterBridge,
+    eventText: input.eventText,
   });
   const maxAttempts = input.maxAttempts ?? 4;
   let repairAttempts = 0;
@@ -506,7 +536,7 @@ export async function repairChapterUntilValid(input: {
         enforceWordTarget: input.enforceWordTarget,
         previousChapterBridge: input.previousChapterBridge,
       }),
-      { temperature: hasTooLong ? 0.32 : 0.48, maxTokens: hasTooLong ? 4200 : 6800 }
+      { model: 'gpt-5.6-luna', temperature: hasTooLong ? 0.32 : 0.48, maxTokens: hasTooLong ? 4200 : 6800 }
     ));
     validation = validateChapterContent({
       content,
@@ -519,6 +549,7 @@ export async function repairChapterUntilValid(input: {
       storyDesign: input.storyDesign,
       instruction: input.instruction,
       previousChapterBridge: input.previousChapterBridge,
+      eventText: input.eventText,
     });
   }
 
@@ -538,6 +569,7 @@ export async function repairChapterUntilValid(input: {
         storyDesign: input.storyDesign,
         instruction: input.instruction,
         previousChapterBridge: input.previousChapterBridge,
+        eventText: input.eventText,
       });
       repairAttempts += 1;
     }
@@ -558,6 +590,7 @@ export async function repairChapterUntilValid(input: {
       storyDesign: input.storyDesign,
       instruction: input.instruction,
       previousChapterBridge: input.previousChapterBridge,
+      eventText: input.eventText,
     });
   }
 

@@ -44,6 +44,7 @@ export interface ReaderReviewContext {
   characters: Character[];
   previousText?: string;
   currentChapter?: ChapterFocus;
+  writerHint?: string; // 项目题材风格，评审需按此调性判断而非通用模板
 }
 
 const READER_PERSONAS: ReaderPersona[] = [
@@ -160,7 +161,7 @@ ${reviewSchema(persona)}`,
           content: `上次输出无法解析或内容为空：${previousRaw.slice(0, 1200)}\n\n重新输出：直接给单个 JSON 对象（第一个字符是 {，最后一个字符是 }），包含 summary 和至少一条 problems/suggestions。不要任何分析或说明。`,
         });
       }
-      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 4200 });
+      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 4200, json: true });
       const repaired = normalizeDraft(extractJSON<ReaderReviewDraft>(previousRaw) ?? {}, persona);
       if (isUsableDraft(repaired)) return repaired;
       lastError = new Error(`${persona.name} 补评内容为空`);
@@ -211,6 +212,7 @@ export async function runReaderReviews(
 5. 信息权限是否越界：角色不能提前知道规则、能力、奖励、关系或幕后真相。
 6. 当前正文目标是 ${targetWordLabel}，字数不足要判断是否收束过早，超出要判断是否注水。
 7. 如果有上一章锚点，必须检查时间、地点、公开信息和情绪余波是否接上。
+${ctx.writerHint ? `8. 本项目题材风格（最高优先）：\n${ctx.writerHint}\n	评审必须按这个题材的读者期待来判断，而不是拿“升级/打怪/掉落”的通用套路当标准。` : ''}
 
 评审人格：
 ${READER_PERSONAS.map((persona) => `- ${persona.name}：${persona.focus}。${persona.brief}`).join('\n')}
@@ -264,7 +266,7 @@ reviews 数组必须同时完整包含三个 readerId：venom-style、pacing-hoo
 不要输出任何分析、说明、Markdown 或第二个 JSON。`,
         });
       }
-      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 7000 });
+      previousRaw = await chat(messages, { temperature: attempt === 1 ? 0.62 : 0.3, maxTokens: 7000, json: true });
       const parsed = extractJSON<{ reviews?: ReaderReviewDraft[] }>(previousRaw);
       if (parsed?.reviews?.length) {
         drafts = parsed.reviews;
