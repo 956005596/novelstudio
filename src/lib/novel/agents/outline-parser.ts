@@ -70,7 +70,7 @@ export type ProgressCallback = (event: ProgressEvent) => void;
 // ============================================================
 // 阶段 2：构建世界观设定
 // ============================================================
-async function buildWorldLore(
+export async function buildWorldLore(
   outline: string,
   onProgress: ProgressCallback
 ): Promise<{ worldLore: WorldLore; templateKey: string; templateReason: string; writerHint: string; initialScene: { sceneName: string; sceneDescription: string; location: string; timeOfDay: string; tension: number } }> {
