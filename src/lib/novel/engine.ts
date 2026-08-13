@@ -45,6 +45,7 @@ import { storyDesignerPlan } from './agents/story-designer';
 import { summarizeCharacterChapterUpdates } from './agents/character-archivist';
 import { buildDirectorDirectiveFromLesson, summarizeCraftLesson } from './agents/craft-lessons';
 import { advanceChapterFocus, ensureChapterFocus, resolveChapterStartTurn, retreatChapterFocus } from './chapter-focus';
+import { buildWorldContext } from './world-context';
 import { CHAPTER_WORD_TARGET_MAX, CHAPTER_WORD_TARGET_MIN, formatChapterWordTarget } from './chapter-policy';
 import { countReadableChars } from './chapter-text';
 import { repairChapterUntilValid, requiredCharacterNamesFromText } from './chapter-guardrails';
@@ -1177,6 +1178,23 @@ export class NovelEngine {
       }
     }
 
+    // === 6.5 应用世界级事实更新（worldFlags）===
+    // 只有剧情中真实发生、影响跨场景/跨章节的重大世界变化才写入，避免世界状态无意义膨胀。
+    if (decision.worldFlagsPatch && Object.keys(decision.worldFlagsPatch).length > 0) {
+      const nextFlags = { ...(turnWorld.worldFlags ?? {}), ...decision.worldFlagsPatch };
+      if (Object.keys(nextFlags).length <= 40) {
+        turnWorld = ensureChapterFocus({ ...turnWorld, worldFlags: nextFlags });
+        this.emitLog(
+          'info',
+          `世界事实更新：${Object.entries(decision.worldFlagsPatch)
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join('，')}`
+        );
+      } else {
+        this.emitLog('warn', `世界事实更新被限制：worldFlags 超过 40 条，本轮更新忽略`);
+      }
+    }
+
     // === 7. 更新 World State ===
     // 判断本 Turn 是否推进了主线节点（通过 Director commentary 或 injection 内容判断）
     const directorText = (decision.commentary ?? '') + ' ' + (decision.injections ?? []).map(i => i.content).join(' ');
@@ -1478,6 +1496,7 @@ export class NovelEngine {
           previousChapterBridge,
           writerHint: worldState.writerHint,
           writerCustomBrief: worldState.agentPolicy?.writerCustomBrief,
+          worldContext: buildWorldContext(worldState),
         },
         (chunk) => {
           this.cb.emit({ type: 'writer:chunk', chunk, chapterId });

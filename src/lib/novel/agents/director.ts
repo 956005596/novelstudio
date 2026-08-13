@@ -25,6 +25,7 @@ import {
 } from '../chapter-policy';
 import { currentVolumeText } from '../long-form-plan';
 import { storyBibleText } from '../story-bible';
+import { buildWorldContext } from '../world-context';
 
 export interface CharacterProposal {
   characterId: string;
@@ -56,6 +57,8 @@ export interface DirectorDecision {
   nextScenePatch?: Partial<WorldState>;
   /** 演绎过程中真实发生的角色成长/掉落/状态记录 */
   characterUpdates?: CharacterProgressUpdate[];
+  /** 世界级事实更新：只有剧情中真实发生、且影响跨场景/跨章节的重大世界变化才写入（如"安全区出现""某势力公开登场"）。 */
+  worldFlagsPatch?: Record<string, string | number | boolean>;
 }
 
 export interface DirectorNewCharacter {
@@ -183,7 +186,8 @@ function buildCausalLogicBrief(worldState: WorldState, recentEvents: NovelEvent[
 - 只执行最近事件、当前章、项目总纲、人物档案或素材库已经支撑的设定；未发生、未公开、无条件出现的制度、人物、能力和关系结论必须删掉或降级成误传/临时反应。
 - 每个注入事件都要说得通：为什么现在发生，谁能知道，现场有没有条件。
 - 若当前章还在铺垫/引爆前段，injections 应优先给前兆、逼近、异响、错判、局部失衡、站位变化或短促试探，不要直接给完整袭击结果。
-- 如果项目题材需要固定流程（升级、破案、修炼、恋爱推进、商业谈判等），只能采用项目创作圣经已经定义的流程；没有定义就不要临时补一套。`;
+- 如果项目题材需要固定流程（升级、破案、修炼、恋爱推进、商业谈判等），只能采用项目创作圣经已经定义的流程；没有定义就不要临时补一套。
+- 时间感：全球接入是瞬间发生的。在接入发生的那一刻，校园里只有系统公告、面板、光纹和慌乱的人群——没有检测区、登记台、登记员、隔离流程或任何官方组织设施。这类组织化流程需要时间建立，绝不能在接入瞬间出现。角色只能依据当下肉眼可见、耳边能听到的事反应。`;
 }
 
 /**
@@ -195,7 +199,8 @@ function buildSystemPrompt(
   targetWordLabel: string,
   totalPlanLabel: string,
   writerHint?: string,
-  delegated = false
+  delegated = false,
+  worldContext = ''
 ): string {
   const lvlDesc =
     directorLvl <= 2
@@ -206,7 +211,7 @@ function buildSystemPrompt(
       ? '你是强主导型导演，剧情走向由你把控，角色服从你的剧本框架'
       : '';
 
-  return `你是 NovelStudio 的 Director Agent，负责调度一场多人演绎的小说场景。
+  return `${worldContext ? `${worldContext}\n\n` : ''}你是 NovelStudio 的 Director Agent，负责调度一场多人演绎的小说场景。
 
 # 你的核心职责
 ${delegated
@@ -332,7 +337,8 @@ ${lvlDesc}
 	      "addBuffs": [],
 	      "removeBuffs": []
 	    }
-	  ]
+	  ],
+	  "worldFlagsPatch": {}    // 世界级事实（可选）：只有剧情中真实发生、影响跨场景/跨章节的重大世界变化才写入，如 {"安全区已出现":"第3章操场东侧"}。普通事件、临时状态不要写。没有就保持 {}。
 	}
 	\`\`\``;
 }
@@ -573,7 +579,8 @@ ${recentEvents
 
   const messages: ChatMessage[] = [
     { role: 'system', content: buildSystemPrompt(template, directorLvl, targetWordLabel, totalPlanLabel, focusedWorld.writerHint,
-      focusedWorld.agentPolicy?.directorMode === 'character_led' && focusedWorld.agentPolicy?.actorAutonomy === 'proactive') },
+      focusedWorld.agentPolicy?.directorMode === 'character_led' && focusedWorld.agentPolicy?.actorAutonomy === 'proactive',
+      buildWorldContext(focusedWorld)) },
     { role: 'user', content: userPrompt },
   ];
 
@@ -697,6 +704,13 @@ ${recentEvents
 	      addBuffs: stringList(item.addBuffs),
 	      removeBuffs: stringList(item.removeBuffs),
 	    })).filter(hasCharacterProgressPayload),
+    worldFlagsPatch: (parsed.worldFlagsPatch && typeof parsed.worldFlagsPatch === 'object' && !Array.isArray(parsed.worldFlagsPatch)
+      ? Object.fromEntries(
+          Object.entries(parsed.worldFlagsPatch as Record<string, unknown>)
+            .map(([key, value]) => [String(key).trim().slice(0, 60), typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? value : String(value ?? '')])
+            .filter(([key]) => (key as string).length > 0)
+        )
+      : undefined),
 	  };
 	}
 

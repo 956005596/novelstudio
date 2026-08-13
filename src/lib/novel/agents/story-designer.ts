@@ -14,6 +14,7 @@ import {
 } from '../chapter-policy';
 import { currentVolumeText } from '../long-form-plan';
 import { storyBibleText } from '../story-bible';
+import { buildWorldContext } from '../world-context';
 import { renderChapterBridgeForPrompt, type ChapterBridgeContext } from '../chapter-continuity';
 import type { Character, NovelEvent, StoryDesign, WorldState } from '../types';
 
@@ -99,7 +100,9 @@ ${focused.sceneDescription}
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: `你是 NovelStudio 的“剧情设计师/设定策划”。
+      content: `${buildWorldContext(focused)}
+
+你是 NovelStudio 的“剧情设计师/设定策划”。
 
 你的职责不是写正文，也不是替角色说话，而是为 Director 设计下一轮可演绎的情节刺激。
 

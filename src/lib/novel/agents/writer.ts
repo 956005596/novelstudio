@@ -43,6 +43,7 @@ export interface WriterContext {
   previousChapterBridge?: ChapterBridgeContext | null;
   writerHint?: string;
   writerCustomBrief?: string;
+  worldContext?: string; // 当前世界认知摘要（导演/设计师/角色/Writer 共享的“此刻世界状态”）
 }
 
 /**
@@ -83,7 +84,7 @@ export async function writerStream(
   const targetWordMax = ctx.currentChapter?.targetWordMax ?? CHAPTER_WORD_TARGET_MAX;
   const targetWordLabel = formatChapterWordTarget(targetWordMin, targetWordMax);
 
-  const systemPrompt = `你是 NovelStudio 的 Writer Agent，负责把事件日志演绎为小说文本。
+  const systemPrompt = `${ctx.worldContext ? `${ctx.worldContext}\n\n` : ''}你是 NovelStudio 的 Writer Agent，负责把事件日志演绎为小说文本。
 
 # 风格模板：${ctx.template.name}
 ${ctx.template.description}

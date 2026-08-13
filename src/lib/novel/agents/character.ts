@@ -22,6 +22,7 @@ import type { WorldManager } from '../world-state';
 import type { CharacterProposal } from './director';
 import { ensureChapterFocus, resolveChapterStartTurn } from '../chapter-focus';
 import { actorPolicyText, normalizeAgentPolicy } from '../agent-policy';
+import { buildWorldContext } from '../world-context';
 
 const CHARACTER_PROTOCOL_ATTEMPTS = 3;
 const CHARACTER_META_TEXT = /(?:我们(?:需要|根据|现在)|根据(?:现场简报|角色要求|设定)|生成.{0,12}(?:行动|对话)|作为(?:AI|角色Agent|模型)|角色(?:需要|应该|可以)|目标是|因此[，,:：]?\s*(?:行动|回答)|输出\s*JSON|提示词|LLM|Agent|分析如下|方案如下|现在是[“\"]刚刚发生的事)/i;
@@ -454,8 +455,20 @@ export function buildCharacterSystemPrompt(
   const speechModule = buildSpeechModule(character);
   const boundaryModule = buildBoundaryModule(character);
   const pulse = buildCharacterPulse(character);
+  const worldCtx = buildWorldContext(worldState);
+  // 角色视角的世界认知：只保留“此刻场景 / 世界阶段 / 已确立事实”三个部分，
+  // 去掉“这个世界的规则与背景”（势力/组织/完整规则是幕后设定，角色不该全知），
+  // 避免稀释角色代入感。
+  const actorWorld = worldCtx
+    .split('\n# ')
+    .filter((block) => /^此刻的场景/.test(block) || /^世界所处的阶段/.test(block) || /^世界已确立的事实/.test(block))
+    .map((block) => `# ${block}`)
+    .join('\n\n');
 
-  return `你是「${character.name}」，一个真实活在这个世界里的、有血有肉的人。
+  return `# 你所在的世界
+${actorWorld}
+
+你是「${character.name}」，一个真实活在这个世界里的、有血有肉的人。
 
 你不是在写小说，不是在答题，不是在扮演。你就是这个人本身——你有名字、有来历、有在乎的人和事、有害怕和想要的东西。从你出生到现在，你一直在活着，刚刚过去的每一刻都真实发生在你身上：你看到了什么、听到了什么、身上哪里痛、心里在想什么。
 
