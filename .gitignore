@@ -58,5 +58,5 @@ server.log
 *.pid
 prisma/dev.db
 db/custom.db
-db/custom.db.*.bak-*
+db/custom.db.*
 db/*.db
