@@ -23,6 +23,7 @@ import type { CharacterProposal } from './director';
 import { ensureChapterFocus, resolveChapterStartTurn } from '../chapter-focus';
 import { actorPolicyText, normalizeAgentPolicy } from '../agent-policy';
 import { buildWorldContext } from '../world-context';
+import type { ChapterBridgeContext } from '../chapter-continuity';
 
 const CHARACTER_PROTOCOL_ATTEMPTS = 3;
 const CHARACTER_META_TEXT = /(?:我们(?:需要|根据|现在)|根据(?:现场简报|角色要求|设定)|生成.{0,12}(?:行动|对话)|作为(?:AI|角色Agent|模型)|角色(?:需要|应该|可以)|目标是|因此[，,:：]?\s*(?:行动|回答)|输出\s*JSON|提示词|LLM|Agent|分析如下|方案如下|现在是[“\"]刚刚发生的事)/i;
@@ -535,7 +536,8 @@ export function buildCharacterUserPrompt(
   focusedWorld: WorldState,
   allCharacters: Character[],
   recentEvents: NovelEvent[],
-  directorHint?: string
+  directorHint?: string,
+  previousChapterBridge?: ChapterBridgeContext | null
 ): string {
   const others = allCharacters.filter(
     (c) =>
@@ -591,6 +593,12 @@ ${effectiveScene}
 
 # 这一章现在该往哪边走
 ${buildChapterCue(focusedWorld)}
+
+${previousChapterBridge ? `# 上一章结尾（你的记忆起点）
+第 ${previousChapterBridge.chapterNo} 章《${previousChapterBridge.chapterTitle}》结尾（可读 ${previousChapterBridge.wordCount} 字）：
+${previousChapterBridge.tail}
+
+你现在就活在这段结尾之后：上一章结束时你在做的事、你站的地方、你身边的人和现场状态，就是此刻的现实。你的动作、台词和判断必须从那里接住——不能假装它没发生，也不能凭空出现在别的地方。` : ''}
 
 ${(() => {
   const p = focusedWorld.agentPolicy;
@@ -648,7 +656,8 @@ export async function characterPropose(
   worldState: WorldState,
   allCharacters: Character[],
   recentEvents: NovelEvent[],
-  directorHint?: string
+  directorHint?: string,
+  previousChapterBridge?: ChapterBridgeContext | null
 ): Promise<CharacterProposal> {
   const template = await wm.getTemplate();
   const focusedWorld = ensureChapterFocus(worldState);
@@ -657,7 +666,8 @@ export async function characterPropose(
     focusedWorld,
     allCharacters,
     recentEvents,
-    directorHint
+    directorHint,
+    previousChapterBridge
   );
 
   const messages: ChatMessage[] = [

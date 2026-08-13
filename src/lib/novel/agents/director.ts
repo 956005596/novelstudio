@@ -398,7 +398,8 @@ export async function directorDecide(
   worldState: WorldState,
   characters: Character[],
   recentEvents: NovelEvent[],
-  pendingDirectives: { id: string; type: string; content: string }[]
+  pendingDirectives: { id: string; type: string; content: string }[],
+  previousChapterBridge?: { chapterNo: number; chapterTitle: string; prompt: string } | null
 ): Promise<DirectorDecision> {
   const focusedWorld = ensureChapterFocus(worldState);
   const template = await wm.getTemplate();
@@ -530,6 +531,11 @@ ${presentChars
 
 # 已建人物库（避免重复创建；性别必须保持一致）
 ${characters.map((c) => `- ${c.name}（${c.role}，性别=${c.persona.gender || '未记录'}）：${c.persona.background || c.persona.stance || '暂无摘要'}`).join('\n') || '- 暂无'}
+
+${previousChapterBridge ? `# 上一章结尾锚点（硬事实，当前章必须从这里接住）
+第 ${previousChapterBridge.chapterNo} 章《${previousChapterBridge.chapterTitle}》
+${previousChapterBridge.prompt}
+你设计的当前章注入事件和角色行动，必须从上一章结尾的时间、地点、人物位置和现场状态接住。上一章结尾没发生的事（面板熄灭、有人受伤、东墙异响等）不能直接作为当前章开场前提。` : ''}
 
 # 最近 10 个事件
 ${recentEvents

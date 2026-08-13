@@ -915,6 +915,12 @@ export class NovelEngine {
     const recentEvents = await this.wm.getRecentEvents(20);
     const chapterNo = worldState.currentChapter?.chapterNo ?? 1;
     const pendingDirectives = await this.wm.peekPendingDirectives(chapterNo);
+    // 上一章结尾锚点：第 2 章起，导演/角色/设计师每轮都要知道"上一章停在哪"，保证章际衔接。
+    const previousChapterBridge = await loadPreviousChapterBridge(
+      this.wm.projectId,
+      worldState,
+      worldState.currentChapter?.chapterNo
+    );
 
     let designWorld = worldState;
     const designIsCurrent =
@@ -931,11 +937,6 @@ export class NovelEngine {
 
     if (shouldRefreshDesign && initialAgentPolicy.designerCanPlanCurrentChapter) {
       this.emitLog('info', `Turn ${worldState.turn + 1}: 剧情设计师规划中…`);
-      const previousChapterBridge = await loadPreviousChapterBridge(
-        this.wm.projectId,
-        worldState,
-        worldState.currentChapter?.chapterNo
-      );
       const design = await this.planAuditedStoryDesign({
         worldState,
         characters,
@@ -965,7 +966,8 @@ export class NovelEngine {
       designWorld,
       characters,
       recentEvents,
-      appliedDirectives
+      appliedDirectives,
+      previousChapterBridge
     );
 
     if (decision.commentary) {
@@ -1098,7 +1100,8 @@ export class NovelEngine {
         turnWorld,
         latestCharacters,
         visibleEvents,
-        turnHint
+        turnHint,
+        previousChapterBridge
       );
       this.emitLog(
         'info',
